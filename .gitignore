@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.idea/
+.opencode/
+opencode.json
+opencode.jsonc

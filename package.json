@@ -1,0 +1,32 @@
+{
+	"name": "opencode-pack-models",
+	"version": "0.1.0",
+	"description": "Model Packs (parallel multi-model ensembles, inter-agent messaging, and consensus synthesis) for OpenCode V2",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"files": ["src"],
+	"scripts": {
+		"build": "bun scripts/build.ts",
+		"syntax": "bun scripts/check-syntax.ts",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"check:effect": "bun scripts/check-effect.ts",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"check": "bun run lint && bun run syntax && bun run typecheck && bun run build && bun test && bun run check:effect"
+	},
+	"peerDependencies": {
+		"@opencode/plugin": "2.2.0",
+		"effect": "^4.0.1"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@opencode/plugin": "2.2.0",
+		"@opencode/schema": "2.2.0",
+		"@types/bun": "latest",
+		"effect": "4.0.1",
+		"typescript": "^5.8.2"
+	}
+}
