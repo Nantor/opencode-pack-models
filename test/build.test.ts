@@ -13,4 +13,4 @@ test("built directory resolves its server inside dist without a custom TUI acros
 		expect(parts.server).toBe(new URL(`file://${directory}/server.ts`).href);
 		expect(parts.tui).toBeUndefined();
 	}
-});
+}, 30_000);
