@@ -22,7 +22,14 @@ export const DEFAULT_CONSENSUS = Object.freeze({
 	enabled: false,
 	model: null,
 	timeoutMs: 120_000,
-	maxInputChars: 60_000,
+	maxInputToken: "25%",
+	maxResultToken: "25%",
+	maxInputTokens: null,
+	maxInputPercentage: 25,
+	maxResultPercentage: 25,
+	maxResultTokens: null,
+	parentReserveTokens: null,
+	maxInputChars: null,
 });
 
 /** Appended to packProviderId for both the hidden agent and local provider. */

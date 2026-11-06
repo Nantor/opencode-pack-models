@@ -20,7 +20,8 @@ test("configuration preserves documented defaults for every pack", async () => {
 				enabled: false,
 				model: null,
 				timeoutMs: 120_000,
-				maxInputChars: 60_000,
+				maxInputTokens: null,
+				maxInputChars: null,
 			},
 		});
 	}
@@ -54,7 +55,8 @@ test("pack overrides win without changing global settings or shared defaults", a
 			enabled: true,
 			model: { provider: "p", model: "synthesis" },
 			timeoutMs: 800,
-			maxInputChars: 60_000,
+			maxInputTokens: null,
+			maxInputChars: null,
 		},
 	});
 	expect(config.packs.overridden).toMatchObject({
@@ -65,6 +67,7 @@ test("pack overrides win without changing global settings or shared defaults", a
 			enabled: false,
 			model: null,
 			timeoutMs: 800,
+			maxInputTokens: null,
 			maxInputChars: 50,
 		},
 	});
@@ -73,6 +76,13 @@ test("pack overrides win without changing global settings or shared defaults", a
 		enabled: false,
 		model: null,
 		timeoutMs: 120_000,
-		maxInputChars: 60_000,
+		maxInputToken: "25%",
+		maxResultToken: "25%",
+		maxInputTokens: null,
+		maxInputPercentage: 25,
+		maxResultPercentage: 25,
+		maxResultTokens: null,
+		parentReserveTokens: null,
+		maxInputChars: null,
 	});
 });

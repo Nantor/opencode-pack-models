@@ -7,9 +7,14 @@ import type { Tool } from "@opencode/schema/tool";
 import { Effect, Fiber, Schema, type Types } from "effect";
 import { setup } from "../src";
 import { decodeConfig, parseModelSpec } from "../src/config.ts";
-import { fairTruncate } from "../src/consensus.ts";
+import { fairTruncate, fairTruncateTokens } from "../src/consensus.ts";
 import { makeGroupManager } from "../src/group-manager.ts";
 import { resolvePackWorkers } from "../src/models.ts";
+import {
+	estimateRequestTokens,
+	tokenEstimator,
+	tokenEstimatorWarning,
+} from "../src/token-budget.ts";
 
 // biome-ignore lint/suspicious/noExportsInTest: Shared in-memory plugin fixture for the review regression suite.
 export function harness(options: Record<string, unknown> = {}) {
@@ -407,6 +412,13 @@ describe("Phase 1 configuration and resolution", () => {
 			enabled: true,
 			model: { provider: "p", model: "A*" },
 			timeoutMs: 120000,
+			maxInputToken: "25%",
+			maxResultToken: "25%",
+			maxInputTokens: null,
+			maxInputPercentage: 25,
+			maxResultPercentage: 25,
+			maxResultTokens: null,
+			parentReserveTokens: null,
 			maxInputChars: 20,
 		});
 	});
@@ -445,6 +457,78 @@ describe("Phase 1 configuration and resolution", () => {
 		expect(result.map((s) => s.length)).toEqual([5, 30, 30]);
 		expect(result[1]).toEndWith("[...truncated]");
 		expect(fairTruncate(["abc", "def"], 1).join("").length).toBe(1);
+	});
+	test("token estimators select model families and fairly enforce token budgets", () => {
+		const claude = tokenEstimator("p", "claude-sonnet-5");
+		const gpt = tokenEstimator("p", "gpt-5-nano");
+		expect(claude.modelName).toStartWith("anthropic/");
+		expect(gpt.modelName).toStartWith("openai/");
+		const result = fairTruncateTokens(
+			["short", "long response ".repeat(100)],
+			20,
+			gpt.count,
+			gpt.truncate,
+		);
+		expect(result[0]).toBe("short");
+		expect(gpt.count(result.join(""))).toBeLessThanOrEqual(20);
+		expect(result[1]).toEndWith("[...truncated]");
+	});
+	test("token quotas terminate when a caller's truncator never shrinks", () => {
+		for (const budget of [0, 5]) {
+			const requestedBudgets: number[] = [];
+			const result = fairTruncateTokens(
+				["abcdef"],
+				budget,
+				(text) => text.length,
+				(text, maxTokens) => {
+					requestedBudgets.push(maxTokens);
+					return text;
+				},
+			);
+			expect(result).toEqual([""]);
+			expect(requestedBudgets).toEqual(budget === 0 ? [0] : [5, 4, 3, 2, 1, 0]);
+		}
+	});
+	test("complete request estimates include history and tool schemas", () => {
+		const estimator = tokenEstimator("p", "gpt-5-nano");
+		const base = estimateRequestTokens(estimator, {
+			system: [{ type: "text", text: "instructions" }],
+			messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+			tools: {},
+		});
+		const withTool = estimateRequestTokens(estimator, {
+			system: [{ type: "text", text: "instructions" }],
+			messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+			tools: {
+				search: {
+					description: "Search files",
+					input: { type: "object", properties: { query: { type: "string" } } },
+				},
+			},
+		});
+		expect(withTool).toBeGreaterThan(base);
+	});
+	test("profile confidence distinguishes exact IDs, family aliases and unsupported families", () => {
+		const known = tokenEstimator("adesso-ai-hub", "gpt-5-nano");
+		expect(known.confidence).toBe("known-profile");
+		expect(known.modelName).toBe("openai/gpt-5-nano");
+		expect(
+			tokenEstimatorWarning("adesso-ai-hub", "gpt-5-nano", known),
+		).toBeUndefined();
+		expect(tokenEstimator("p", "claude-sonnet-5").confidence).toBe(
+			"family-approximation",
+		);
+		for (const id of [
+			"google/gemma-4-31b-it",
+			"nemotron-3-super-120b",
+			"unknown",
+		]) {
+			const estimator = tokenEstimator("gpt-gateway", id);
+			expect(estimator.confidence).toBe("unknown-fallback");
+			expect(tokenEstimatorWarning("gpt-gateway", id, estimator)).toContain(
+				"context fit is not validated",
+			);
+		}
 	});
 	test("native effort variants take precedence over hook options", async () => {
 		const h = harness();

@@ -75,7 +75,8 @@ Register the plugin and define your model packs in your project's `opencode.json
           "enabled": false,
           "model": null,
           "timeoutMs": 120000,
-          "maxInputChars": 60000
+          "maxInputToken": "25%",
+          "maxResultToken": "25%"
         },
         "packs": {
           "review": {
@@ -120,10 +121,42 @@ Register the plugin and define your model packs in your project's `opencode.json
 | `consensus.enabled` | Global / Per-pack | `false` | When `true`, runs a single tool-free synthesis call over all successful worker responses. |
 | `consensus.model` | Global / Per-pack | `null` | Model used for synthesis. When `null`, falls back to the parent session's active model, agent model, or workspace default. |
 | `consensus.timeoutMs` | Global / Per-pack | `120000` | Timeout in milliseconds for the consensus synthesis request. |
-| `consensus.maxInputChars` | Global / Per-pack | `60000` | Character budget shared fairly across successful worker responses passed to synthesis. |
+| `consensus.maxInputToken` | Global / Per-pack | `"25%"` | Positive integer evidence-token cap, or percentage string of the consensus model's input allowance; always bounded by space after instructions. |
+| `consensus.maxResultToken` | Global / Per-pack | `"25%"` | Positive integer parent-result token cap, or percentage string of the parent's remaining usable capacity. |
 | `enableInterAgentMessaging` | Per-pack | `false` | Reserved for future inter-agent messaging support. |
 
 > **Note:** Model matching against enabled catalog models is exact and case-sensitive. Unavailable models are skipped with a warning rather than failing the entire pack (unless no models in the pack are available). Virtual pack models cannot reference other packs.
+
+Budgeting needs only the two dual settings above; both default to `"25%"`.
+Use a number for absolute tokens (`15000`), or a string ending in `%` for relative
+tokens (`"25%"`, `"12.5%"`). Percentages must be greater than zero and at most 100;
+absolute values must be positive integers. Both modes are clamped to available capacity. Instructions,
+wrappers, the estimator safety margin and parent continuation space are reserved
+automatically. The continuation reserve is 5% of the parent's safe input allowance,
+up to 4,096 tokens. No default absolute token or character ceilings override the
+percentages. Result budgeting also applies when consensus is disabled or fails.
+
+**Migration:** `maxInputPercentage`, `maxResultPercentage`, `maxInputTokens`,
+`maxResultTokens`, `parentReserveTokens`, and `maxInputChars` remain deprecated
+compatibility settings and emit startup warnings. New singular names take precedence
+within a scope; per-pack settings override global settings. Where both old percentage
+and token aliases are supplied, the percentage alias determines the normalized limit.
+
+Worker requests are estimated from the complete outbound context (system parts,
+conversation history, tool definitions, and protocol overhead) with
+[`ai-tokenizer`](https://www.npmjs.com/package/ai-tokenizer). Requests exceeding
+85% of a catalog model's declared input limit are rejected before provider
+submission. The margin accounts for tokenizer approximation and provider-added
+metadata; estimates are not provider billing totals.
+
+Estimator diagnostics distinguish `known-profile` (matching packaged model ID),
+`family-approximation` (a representative profile for a different version), and
+`unknown-fallback` (no supported mapping). None guarantees provider acceptance.
+Unknown mappings produce visible pack warnings and server logs; their GPT-5
+fallback remains a heuristic for limiting, not a validated context-fit check.
+Gemma and Nemotron are explicitly identified as unsupported families rather than
+being described as GPT-compatible. Matching profiles can also have substantial
+estimation error; multimodal inputs are not measured precisely.
 
 ### 3. Optional: Configure Dedicated Subagents
 
@@ -218,6 +251,16 @@ Contributions, bug reports, and feature enhancements are welcome!
 - Keep plugin-wide defaults, identities, prompts, and storage prefixes in [`src/constants.ts`](src/constants.ts) and keep [`docs/CONSTANTS.md`](docs/CONSTANTS.md) in sync when defaults change.
 - Follow existing Effect v4 patterns and Biome formatting rules (tabs for indentation, double quotes).
 - Ensure new behavior is covered by tests in `test/`.
+
+---
+
+## Versioning
+
+This project adheres to [Semantic Versioning (SemVer 2.0.0)](https://semver.org/):
+
+- **MAJOR** (`X.0.0`): Incompatible API, configuration schema, or persistence contract changes.
+- **MINOR** (`0.X.0`): Backwards-compatible new features and options.
+- **PATCH** (`0.0.X`): Backwards-compatible bug fixes and internal improvements.
 
 ---
 

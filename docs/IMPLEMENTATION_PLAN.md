@@ -68,7 +68,7 @@ opencode-pack-models/
   - Extract the final assistant message from each completed worker via `ctx.session.context`.
   - If at least 1 worker succeeded:
     - **`consensus.enabled === false`**: Format all worker responses (with worker label, status, duration, and worker `sessionID`) and log to the Coordinator Session.
-    - **`consensus.enabled === true`**: Resolve consensus model (pack override → global → parent session's active model), apply fair per-worker character quota (`maxInputChars`) with unused-quota redistribution, call `ctx.experimental.generate.text` with `consensus.timeoutMs`, and return **only** the synthesized summary (falling back to the direct multi-worker output with a warning banner if synthesis fails).
+    - **`consensus.enabled === true`**: Resolve consensus model, fairly share its `maxInputToken` evidence budget after reserving instructions, synthesize with `consensus.timeoutMs`, and cap the result independently using `maxResultToken` and parent headroom. Both limits support absolute tokens or percentage strings; fallbacks receive the same parent-result cap.
 
 ### Step 1.5: `subagent` Tool Interception (`src/index.ts`)
 - In `ctx.tool.transform`, inspect the built-in `subagent` tool and wrap its `execute` function:

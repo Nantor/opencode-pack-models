@@ -1,6 +1,6 @@
 {
 	"name": "opencode-pack-models",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Model Packs (parallel multi-model ensembles, inter-agent messaging, and consensus synthesis) for OpenCode V2",
 	"type": "module",
 	"exports": {
@@ -28,5 +28,8 @@
 		"@types/bun": "latest",
 		"effect": "4.0.1",
 		"typescript": "^5.8.2"
+	},
+	"dependencies": {
+		"ai-tokenizer": "^1.0.7"
 	}
 }

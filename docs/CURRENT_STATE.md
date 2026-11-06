@@ -27,6 +27,8 @@ The coordinator is a native session driven by a **local scripted model adapter**
 | `src/runner.ts` | Allocate sessions and execute workers with timeouts and cancellation cleanup. |
 | `src/consensus.ts` | Format worker tool results; retain the fair-truncation utility. |
 | `src/session-id.ts` | Brand native session IDs for host calls. |
+| `src/token-budget.ts` | Select calibrated token estimators, truncate by tokens and estimate complete requests. |
+| `src/parent-budget.ts` | Independently estimate parent result headroom, percentages and continuation reserve. |
 
 ## Selection and execution
 
@@ -38,7 +40,7 @@ The plugin preallocates the coordinator and worker sessions. It registers a dedi
 
 The coordinator's context hook exposes only `subagent`, with a stable definition listing the group's worker IDs throughout the turn. The scripted adapter emits one fixed call per member in configured order, all in the initial dispatch step. Dispatch independently rejects extra workers, duplicates, agent/model changes and background worker calls, and checks subagent permission. Every worker receives the original task unchanged. A semaphore enforces `maxConcurrency` regardless of the number of emitted calls.
 
-Workers keep their configured agent and actual pack model. Native effort variants travel with the model; non-native worker efforts use a scoped `reasoningEffort` hook. Worker execution is bounded by `timeoutMs` and reads the newest new assistant text. Provider failures, empty responses and timeouts become diagnostic tool results so other workers can finish. Failed submissions attempt a native interrupt before releasing the permit.
+Workers keep their configured agent and actual pack model. Native effort variants travel with the model; non-native worker efforts use a scoped `reasoningEffort` hook. Before provider submission, `ai-tokenizer` estimates the complete outbound context (system parts, conversation history, tools, structure and metadata). A request above 85% of the model catalog's declared input limit is rejected, preserving a margin for estimation error and provider-added tokens. Worker execution is bounded by `timeoutMs` and reads the newest new assistant text. Provider failures, empty responses and timeouts become diagnostic tool results so other workers can finish. Failed submissions attempt a native interrupt before releasing the permit.
 
 After every worker result is collected, the local adapter emits a nonempty final answer. There are no corrective prompts or autonomous coordinator iterations. All-worker failure rejects with diagnostics and makes no synthesis request. Final foreground `output.output` is exactly the coordinator's final assistant text; content uses the native subagent wrapper, with coordinator `sessionID`/status metadata.
 
@@ -50,9 +52,48 @@ With `consensus.enabled: false`, the final answer is a deterministic labelled re
 
 With `consensus.enabled: true` and at least one successful worker, exactly one `experimental.generate.text` call uses a fixed synthesis prompt and successful worker evidence. There are no tools, sessions or plan-agent instructions in that synthesis request. Its model is explicit `consensus.model`, or the parent's active model, its agent model, then the workspace default. Explicit efforts must be native variants. Omissions/failures are prepended deterministically to the synthesis answer. The final-answer promise is memoized per turn so replay/retry cannot trigger a second synthesis call. Synthesis failure/timeout falls back to the deterministic worker report; interruption propagates without fallback.
 
-The total deadline is `worker timeoutMs × worker count + consensus.timeoutMs`. `consensus.timeoutMs` also bounds the single synthesis call; `consensus.maxInputChars` fairly budgets successful worker evidence bodies. Full worker tool results and transcripts remain untruncated. Local adapter dispatch/final events have zero token usage; the synthesis API's usage is separate from coordinator transcript usage.
+The total deadline is `worker timeoutMs × worker count + consensus.timeoutMs`. `consensus.timeoutMs` also bounds the single synthesis call. `consensus.maxInputToken` fairly budgets worker evidence after reserving prompt overhead from 85% of the synthesis input allowance. Full worker tool results and transcripts remain untruncated. Local adapter dispatch/final events have zero token usage; synthesis API usage is separate.
 
 ## Follow-ups, background and cancellation
+
+Consensus evidence is capped by `maxInputToken` (absolute tokens or percentage of
+input allowance) and space after fixed instructions. Returned answers
+are independently capped by `maxResultToken` (absolute tokens or percentage of remaining
+capacity). Percentage strings use `%`, such as `"25%"`; both defaults are `"25%"`.
+All modes are clamped to available space. Parent remaining capacity is measured
+using the parent estimator. Parent budgeting
+automatically reserves 5% of safe input capacity (up to 4096 tokens) plus wrapper overhead. It prefers the latest
+outbound request count and conservatively adds transcript history; without a
+snapshot it uses history only, so system/tool overhead is not measured precisely.
+Concurrent results are not atomically reserved. Background delivery rechecks
+capacity. When the parent has insufficient result capacity (fewer than 64
+estimated tokens), the pack still completes rather than failing: both
+foreground and background runs return an `insufficientParentBudgetNotice`
+that reports completion but points to the coordinator for inspection, and in
+background mode the synthetic completion notification is delivered (with
+`resume: true`) rather than suppressed. The pack never silently truncates the
+original task or the worker runs; it just substitutes a notice when its result
+cannot fit.
+
+Only the two dual settings are recommended public budget controls. The deprecated
+`maxInputPercentage`, `maxResultPercentage`, `maxInputTokens`, `maxResultTokens`,
+`parentReserveTokens`, and `maxInputChars`
+remain accepted with startup warnings. Explicit aliases normalize per scope;
+new singular names win within a scope, and pack settings override global settings.
+
+The host's stateless text API has no output-token parameter. Synthesis receives
+a concise-answer instruction, then the result is recounted and visibly truncated
+if needed. The same return cap applies to direct reports and synthesis fallbacks.
+Full worker transcripts remain in native sessions; the coordinator's final text
+is the bounded result, not an archived copy of an unbounded synthesis answer.
+
+Token estimators expose `known-profile`, `family-approximation`, or
+`unknown-fallback` confidence and an explanation. Exact packaged model-ID matches
+are preferred even behind a gateway; provider names never determine the family.
+Unknown models (including Gemma and Nemotron) retain a GPT-5 heuristic with visible
+group warnings and server logs. Worker warnings are deduplicated within a group;
+consensus fallback warnings appear with the synthesized result. No confidence
+category or fixed safety margin guarantees provider acceptance.
 
 The returned ID is the coordinator ID. Parent follow-ups reuse coordinator and worker histories with fixed membership. They must originate from the original parent and cannot change the pack or worker agent. Direct worker follow-ups through the parent tool are rejected. Concurrent turns on a group are rejected.
 

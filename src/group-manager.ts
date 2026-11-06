@@ -22,6 +22,8 @@ const WorkerSchema = Schema.Struct({
 	modelID: Schema.String,
 	effort: Schema.optionalKey(Schema.String),
 	useHookEffort: Schema.Boolean,
+	// Optional so groups persisted before token budgeting still decode on reload.
+	inputTokenLimit: Schema.optionalKey(Schema.Number),
 	sessionID: Schema.String,
 	status: Schema.Literals([
 		"pending",

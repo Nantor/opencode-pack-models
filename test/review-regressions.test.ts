@@ -46,8 +46,11 @@ test("skipped members remain visible with consensus, background replies and pers
 						expect(result.content).toContain("Synthesized answer");
 						const stored = h.stored.get(`pack_group/${groupID}`);
 						expect(stored).toMatchObject({
-							warnings: ["Skipped unavailable model: p/missing"],
+							warnings: expect.arrayContaining([
+								"Skipped unavailable model: p/missing",
+							]),
 						});
+						expect(result.content).toContain("context fit is not validated");
 					}
 					const followup = yield* h.execute({
 						sessionID: groupID,
@@ -56,6 +59,14 @@ test("skipped members remain visible with consensus, background replies and pers
 					expect(followup.content).toContain(
 						"Warning: Skipped unavailable model: p/missing",
 					);
+					const persisted = h.stored.get(`pack_group/${groupID}`) as {
+						warnings: string[];
+					};
+					expect(
+						persisted.warnings.filter((warning) =>
+							warning.startsWith("Token estimate for p/B:"),
+						),
+					).toHaveLength(1);
 				}),
 			),
 		);
@@ -623,4 +634,141 @@ test("worker outcome diagnostics include provider error and messaging configurat
 			}),
 		),
 	);
+});
+
+test("failed legacy catalog recovery releases a follow-up reservation", async () => {
+	const h = harness();
+	const groupID = "ses_existing";
+	const workerID = "ses_worker";
+	h.sessions.set(groupID, {
+		id: groupID as never,
+		messages: [],
+		metadata: { packModels: { role: "coordinator", packId: "pair" } },
+	});
+	h.sessions.set(workerID, {
+		id: workerID as never,
+		messages: [],
+		metadata: { packModels: { role: "worker", groupSessionID: groupID } },
+	});
+	h.stored.set(`pack_group/${groupID}`, {
+		groupSessionID: groupID,
+		packId: "pair",
+		agentId: "worker",
+		parentSessionID: "ses_parent",
+		enableInterAgentMessaging: false,
+		workers: [
+			{
+				workerId: "worker-1",
+				label: "worker-1 (p/B)",
+				providerID: "p",
+				modelID: "B",
+				useHookEffort: false,
+				sessionID: workerID,
+				status: "pending",
+			},
+		],
+		createdAt: 0,
+	});
+	h.stored.set(`pack_worker/${workerID}`, groupID);
+	const list = h.ctx.model.list;
+	let failLookup = true;
+	Object.assign(h.ctx.model, {
+		list: () =>
+			failLookup ? Effect.fail(new Error("catalog unavailable")) : list(),
+	});
+	await Effect.runPromise(
+		Effect.scoped(
+			Effect.gen(function* () {
+				yield* setup(h.ctx);
+				const failed = yield* h
+					.execute({ sessionID: groupID, prompt: "first" })
+					.pipe(Effect.result);
+				expect(failed._tag).toBe("Failure");
+				failLookup = false;
+				const retry = yield* h.execute({ sessionID: groupID, prompt: "retry" });
+				expect(retry.content).not.toContain("already has an active run");
+				Object.assign(h.ctx.model, { list: () => Effect.never });
+				const interruptedLookup = yield* h
+					.execute({ sessionID: groupID, prompt: "cancelled lookup" })
+					.pipe(Effect.forkChild);
+				yield* Effect.sleep(5);
+				yield* Fiber.interrupt(interruptedLookup);
+				Object.assign(h.ctx.model, { list });
+				const afterCancellation = yield* h.execute({
+					sessionID: groupID,
+					prompt: "after cancellation",
+				});
+				expect(afterCancellation.content).not.toContain(
+					"already has an active run",
+				);
+			}),
+		),
+	);
+});
+
+test("zero-capacity workers are admitted to preflight and rejected", async () => {
+	const h = harness({ packs: { pair: { models: ["p/B"] } } });
+	const list = h.ctx.model.list;
+	Object.assign(h.ctx.model, {
+		list: () =>
+			list().pipe(
+				Effect.map(({ data }) => ({
+					data: data.map((model) =>
+						model.providerID === "p" && model.id === "B"
+							? { ...model, limit: { ...model.limit, input: 0 } }
+							: model,
+					),
+				})),
+			),
+	});
+	await Effect.runPromise(
+		Effect.scoped(
+			Effect.gen(function* () {
+				yield* setup(h.ctx);
+				const result = yield* h
+					.execute({ agent: "worker", prompt: "request" })
+					.pipe(Effect.exit);
+				expect(result._tag).toBe("Failure");
+				if (result._tag === "Failure")
+					expect(Cause.pretty(result.cause)).toContain(
+						"Estimated worker input",
+					);
+				expect(h.interrupted.length).toBeGreaterThan(0);
+			}),
+		),
+	);
+});
+
+test("insufficient parent headroom still completes foreground and background runs", async () => {
+	for (const background of [false, true]) {
+		const h = harness({
+			packs: {
+				pair: {
+					models: ["p/B"],
+					consensus: { enabled: false, parentReserveTokens: 1_000_000 },
+				},
+			},
+		});
+		await Effect.runPromise(
+			Effect.scoped(
+				Effect.gen(function* () {
+					yield* setup(h.ctx);
+					const result = yield* h.execute({
+						agent: "worker",
+						prompt: "request",
+						background,
+					});
+					if (background) {
+						yield* Effect.sleep(30);
+						const notice = h.audit.find(
+							(entry) => entry.sessionID === "ses_parent",
+						);
+						expect(notice?.resume).toBe(true);
+						expect(notice?.text).toContain("insufficient result capacity");
+					} else
+						expect(result.content).toContain("insufficient result capacity");
+				}),
+			),
+		);
+	}
 });

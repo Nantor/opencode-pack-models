@@ -19,6 +19,21 @@ import {
 const Identifier = Schema.String.check(Schema.isPattern(/^[^/#\s]+$/));
 const NonEmpty = Schema.String.check(Schema.isMinLength(1));
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
+const Percentage = Schema.Number.check(
+	Schema.isGreaterThan(0),
+	Schema.isLessThanOrEqualTo(100),
+);
+/** Numbers are positive integer token counts; strings must explicitly include %. */
+export const TokenLimitSchema = Schema.Union([
+	PositiveInt,
+	Schema.String.check(Schema.isPattern(/^(?:\d+(?:\.\d+)?)%$/)).check(
+		Schema.makeFilter(
+			(value) =>
+				Number(value.slice(0, -1)) > 0 && Number(value.slice(0, -1)) <= 100,
+		),
+	),
+]);
+export type TokenLimit = typeof TokenLimitSchema.Type;
 export const ModelSpecSchema = Schema.Struct({
 	provider: Identifier,
 	model: NonEmpty,
@@ -54,6 +69,19 @@ const ConsensusSchema = Schema.Struct({
 	enabled: Schema.optionalKey(Schema.Boolean),
 	model: Schema.optionalKey(Schema.Union([ModelInput, Schema.Null])),
 	timeoutMs: Schema.optionalKey(PositiveInt),
+	maxInputToken: Schema.optionalKey(TokenLimitSchema),
+	maxResultToken: Schema.optionalKey(TokenLimitSchema),
+	/** @deprecated Explicit compatibility ceiling; prefer maxInputPercentage. */
+	maxInputTokens: Schema.optionalKey(PositiveInt),
+	/** @deprecated Use maxInputToken: "25%". */
+	maxInputPercentage: Schema.optionalKey(Percentage),
+	/** @deprecated Use maxResultToken: "25%". */
+	maxResultPercentage: Schema.optionalKey(Percentage),
+	/** @deprecated Explicit compatibility ceiling; prefer maxResultPercentage. */
+	maxResultTokens: Schema.optionalKey(PositiveInt),
+	/** @deprecated Continuation reserve is automatic unless explicitly overridden. */
+	parentReserveTokens: Schema.optionalKey(PositiveInt),
+	/** @deprecated Explicit compatibility ceiling; prefer maxInputPercentage. */
 	maxInputChars: Schema.optionalKey(PositiveInt),
 });
 const PackSchema = Schema.Struct({
@@ -80,7 +108,22 @@ export interface ConsensusConfig {
 	enabled: boolean;
 	model: ModelSpec | null;
 	timeoutMs: number;
-	maxInputChars: number;
+	/** Absolute evidence tokens or a percentage of consensus input capacity. */
+	maxInputToken: TokenLimit;
+	/** Absolute parent-result tokens or a percentage of remaining parent capacity. */
+	maxResultToken: TokenLimit;
+	/** @deprecated Explicit legacy ceiling; null means no absolute ceiling. */
+	maxInputTokens: number | null;
+	/** @deprecated Retained decoded alias; execution uses maxInputToken. */
+	maxInputPercentage: number;
+	/** @deprecated Retained decoded alias; execution uses maxResultToken. */
+	maxResultPercentage: number;
+	/** @deprecated Explicit legacy ceiling; null means no absolute ceiling. */
+	maxResultTokens: number | null;
+	/** @deprecated Explicit legacy reserve; null selects the automatic policy. */
+	parentReserveTokens: number | null;
+	/** @deprecated Explicit legacy character ceiling; null disables it. */
+	maxInputChars: number | null;
 }
 /** Effective per-pack limits and the ordered, unexpanded member list. */
 export interface PackConfig {
@@ -107,6 +150,26 @@ export const decodeConfig = Effect.fn("decodeConfig")(function* (
 	input: unknown,
 ) {
 	const options = yield* Schema.decodeUnknownEffect(OptionsSchema)(input);
+	// Warn once during startup, rather than on every worker request or follow-up.
+	const legacyKeys = [
+		"maxInputTokens",
+		"maxInputPercentage",
+		"maxResultPercentage",
+		"maxResultTokens",
+		"parentReserveTokens",
+		"maxInputChars",
+	] as const;
+	for (const settings of [
+		options.consensus,
+		...Object.values(options.packs).map((pack) => pack.consensus),
+	]) {
+		if (!settings) continue;
+		const supplied = legacyKeys.filter((key) => settings[key] !== undefined);
+		if (supplied.length)
+			yield* Effect.logWarning(
+				`Deprecated consensus budget overrides: ${supplied.join(", ")}. Prefer maxInputToken and maxResultToken; supplied overrides remain honored.`,
+			);
+	}
 	const specs = [
 		...Object.values(options.packs).flatMap((pack) => [
 			...pack.models,
@@ -126,9 +189,32 @@ export const decodeConfig = Effect.fn("decodeConfig")(function* (
 		...DEFAULT_CONSENSUS,
 		...options.consensus,
 	};
+	// Normalize each scope separately so a pack's old alias can override a global
+	// new setting. Within one scope the new singular name always takes precedence.
+	const limitsFor = (settings: typeof options.consensus) => ({
+		...(settings?.maxInputToken !== undefined
+			? { maxInputToken: settings.maxInputToken }
+			: settings?.maxInputPercentage !== undefined
+				? { maxInputToken: `${settings.maxInputPercentage}%` }
+				: settings?.maxInputTokens !== undefined
+					? { maxInputToken: settings.maxInputTokens }
+					: {}),
+		...(settings?.maxResultToken !== undefined
+			? { maxResultToken: settings.maxResultToken }
+			: settings?.maxResultPercentage !== undefined
+				? { maxResultToken: `${settings.maxResultPercentage}%` }
+				: settings?.maxResultTokens !== undefined
+					? { maxResultToken: settings.maxResultTokens }
+					: {}),
+	});
 	const packs = Object.fromEntries(
 		Object.entries(options.packs).map(([id, pack]) => {
-			const consensus = { ...global, ...pack.consensus };
+			const consensus = {
+				...global,
+				...limitsFor(options.consensus),
+				...pack.consensus,
+				...limitsFor(pack.consensus),
+			};
 			return [
 				id,
 				{

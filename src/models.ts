@@ -3,6 +3,7 @@ import type { ProviderEditor } from "@opencode/plugin/effect/provider";
 import { Effect } from "effect";
 import type { Config, ModelSpec, PackConfig } from "./config.ts";
 import { PACK_PROVIDER_NAME } from "./constants.ts";
+import { tokenEstimatorWarning } from "./token-budget.ts";
 
 /**
  * Catalog lookup and registration of the synthetic provider. Pack models are
@@ -18,6 +19,8 @@ export interface ResolvedWorker {
 	modelID: string;
 	effort?: string;
 	useHookEffort: boolean;
+	/** Declared input allowance before the safety margin; absent in older groups. */
+	inputTokenLimit?: number;
 }
 
 /**
@@ -68,6 +71,9 @@ export const resolveModel = Effect.fn("resolveModel")(function* (
 		...(spec.effort ? { effort: spec.effort } : {}),
 		useHookEffort:
 			!!spec.effort && !model.variants.some((v) => v.id === spec.effort),
+		inputTokenLimit:
+			model.limit.input ??
+			Math.max(0, model.limit.context - model.limit.output),
 		workerId: "",
 		label: "",
 	} satisfies ResolvedWorker;
@@ -103,6 +109,14 @@ export const resolvePackWorkers = Effect.fn("resolvePackWorkers")(function* (
 			break;
 		}
 		const workerId = `worker-${workers.length + 1}`;
+		const estimatorWarning = tokenEstimatorWarning(
+			resolved.providerID,
+			resolved.modelID,
+		);
+		if (estimatorWarning && !warnings.includes(estimatorWarning)) {
+			warnings.push(estimatorWarning);
+			yield* Effect.logWarning(estimatorWarning);
+		}
 		workers.push({
 			...resolved,
 			workerId,

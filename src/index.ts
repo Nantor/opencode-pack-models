@@ -6,10 +6,24 @@ import type { Tool } from "@opencode/schema/tool";
 import { Cause, Effect, Schema } from "effect";
 import { decodeConfig } from "./config.ts";
 import { PLUGIN_ID, SUBAGENT_TOOL_NAME } from "./constants.ts";
-import { makeCoordinatorRuntime } from "./coordinator.ts";
+import {
+	insufficientParentBudgetNotice,
+	makeCoordinatorRuntime,
+} from "./coordinator.ts";
 import { makeGroupManager } from "./group-manager.ts";
 import { registerProvider } from "./models.ts";
+import {
+	type ParentContextSnapshot,
+	parentResultBudget,
+} from "./parent-budget.ts";
 import { type PackInput, formatPackOverview, prepareGroup } from "./runner.ts";
+import { SessionID } from "./session-id.ts";
+import {
+	INPUT_TOKEN_SAFETY_RATIO,
+	estimateRequestTokens,
+	limitResultText,
+	tokenEstimator,
+} from "./token-budget.ts";
 
 /**
  * Effect-native plugin entry point. The virtual provider only advertises
@@ -35,17 +49,79 @@ export const setup = Effect.fn("packModels.setup")(function* (
 	const config = yield* decodeConfig(ctx.options).pipe(Effect.orDie);
 	const scope = yield* Effect.scope;
 	const manager = makeGroupManager(ctx);
-	const coordinator = makeCoordinatorRuntime(ctx, manager, config);
+	const parentSnapshots = new Map<string, ParentContextSnapshot>();
+	const coordinator = makeCoordinatorRuntime(
+		ctx,
+		manager,
+		config,
+		parentSnapshots,
+	);
 	// Plugin-instance state: prevent concurrent turns on the same group and
 	// scope non-native reasoning effort to currently running worker sessions.
 	const active = new Set<string>();
+	// A session becomes snapshot-relevant only after it actually invokes a pack.
+	// Its first run uses the history fallback; later outbound turns get full snapshots.
+	const packParents = new Set<string>();
 	const efforts = new Map<string, string>();
+	// Scope admission checks to active pack workers, never parent/coordinator turns.
+	const tokenLimits = new Map<
+		string,
+		{ providerID: string; modelID: string; input: number }
+	>();
 	yield* registerProvider(ctx, config);
 	yield* coordinator.install;
 	yield* ctx.session.hook("context", (event: SessionContext) =>
-		Effect.sync(() => {
+		Effect.gen(function* () {
+			const limit = tokenLimits.get(event.sessionID);
 			const effort = efforts.get(event.sessionID);
 			if (effort) event.options.reasoningEffort = effort;
+			// Internal worker requests are estimated once below and never enter the
+			// parent cache. Coordinator requests use the local scripted provider.
+			if (
+				!limit &&
+				packParents.has(event.sessionID) &&
+				event.model &&
+				event.system &&
+				event.messages &&
+				event.tools
+			) {
+				const estimator = tokenEstimator(
+					event.model.providerID,
+					event.model.id,
+				);
+				// Outbound messages are provider-ready; context() returns stored rows.
+				// Use the same stored representation as parentResultBudget's growth check.
+				const history = yield* ctx.session
+					.context({
+						sessionID: SessionID.make(event.sessionID),
+					})
+					.pipe(Effect.orDie);
+				parentSnapshots.set(event.sessionID, {
+					model: event.model,
+					tokens: estimateRequestTokens(estimator, event),
+					historyTokens: estimator.count(JSON.stringify(history)),
+				});
+				if (parentSnapshots.size > 256) {
+					const oldest = parentSnapshots.keys().next().value;
+					if (oldest) parentSnapshots.delete(oldest);
+				}
+			}
+			if (!limit) return;
+			const estimator = tokenEstimator(limit.providerID, limit.modelID);
+			// Check every outbound worker context, not just the newest user prompt:
+			// follow-up history and newly accumulated tool results also consume input.
+			const estimated = estimateRequestTokens(estimator, {
+				system: event.system ?? [],
+				messages: event.messages ?? [],
+				tools: event.tools ?? {},
+			});
+			const safeLimit = Math.floor(limit.input * INPUT_TOKEN_SAFETY_RATIO);
+			if (estimated > safeLimit)
+				return yield* Effect.die(
+					new Error(
+						`Estimated worker input (${estimated} tokens using ${estimator.modelName}; ${estimator.confidence}) exceeds the heuristic limit (${safeLimit}; ${INPUT_TOKEN_SAFETY_RATIO * 100}% of ${limit.input}) for ${limit.providerID}/${limit.modelID}. This is not a provider-validated token count.`,
+					),
+				);
 		}),
 	);
 	yield* ctx.tool.transform((editor: ToolEditor) => {
@@ -122,30 +198,69 @@ export const setup = Effect.fn("packModels.setup")(function* (
 						return yield* Effect.fail(
 							new Error("Pack group already has an active run"),
 						);
-					if (existing) active.add(existing.groupSessionID);
-					// Reserve existing groups before preparation so concurrent
-					// follow-ups cannot run on the same persistent worker sessions.
-					const { group, pack } = yield* prepareGroup(
-						ctx,
-						manager,
-						config,
-						packId,
-						input,
-						context.sessionID,
-						existing,
-					).pipe(
+					// Register the parent before preparation/run so its next outbound context
+					// refreshes the snapshot. Worker contexts use tokenLimits, not this set;
+					// prepareGroup creates sessions, and coordinator.run starts requests below.
+					packParents.add(context.sessionID);
+					// Reservation, preparation, catalog recovery and runtime-map setup share
+					// one failure/cancellation boundary so follow-ups can never stay reserved.
+					const { group, pack } = yield* Effect.gen(function* () {
+						if (existing) active.add(existing.groupSessionID);
+						const prepared = yield* prepareGroup(
+							ctx,
+							manager,
+							config,
+							packId,
+							input,
+							context.sessionID,
+							existing,
+						);
+						const needsCatalog = prepared.group.workers.some(
+							(worker) => worker.inputTokenLimit === undefined,
+						);
+						const workerCatalog = needsCatalog
+							? (yield* ctx.model.list()).data
+							: [];
+						active.add(prepared.group.groupSessionID);
+						for (const worker of prepared.group.workers) {
+							if (worker.useHookEffort && worker.effort)
+								efforts.set(worker.sessionID, worker.effort);
+							const catalogModel = workerCatalog.find(
+								(candidate) =>
+									candidate.providerID === worker.providerID &&
+									candidate.id === worker.modelID,
+							);
+							const inputTokenLimit =
+								worker.inputTokenLimit ??
+								(catalogModel
+									? (catalogModel.limit.input ??
+										Math.max(
+											0,
+											catalogModel.limit.context - catalogModel.limit.output,
+										))
+									: undefined);
+							if (inputTokenLimit !== undefined)
+								tokenLimits.set(worker.sessionID, {
+									providerID: worker.providerID,
+									modelID: worker.modelID,
+									input: inputTokenLimit,
+								});
+						}
+						return prepared;
+					}).pipe(
 						Effect.onExit((exit) =>
-							Effect.sync(() => {
-								if (exit._tag === "Failure" && existing)
-									active.delete(existing.groupSessionID);
-							}),
+							exit._tag === "Failure"
+								? Effect.sync(() => {
+										const failedGroupID = existing?.groupSessionID;
+										if (failedGroupID) active.delete(failedGroupID);
+										for (const worker of existing?.workers ?? []) {
+											efforts.delete(worker.sessionID);
+											tokenLimits.delete(worker.sessionID);
+										}
+									})
+								: Effect.void,
 						),
 					);
-					active.add(group.groupSessionID);
-					for (const worker of group.workers) {
-						if (worker.useHookEffort && worker.effort)
-							efforts.set(worker.sessionID, worker.effort);
-					}
 					const run = context
 						.progress({ sessionID: group.groupSessionID, status: "running" })
 						.pipe(
@@ -155,6 +270,8 @@ export const setup = Effect.fn("packModels.setup")(function* (
 									active.delete(group.groupSessionID);
 									for (const worker of group.workers)
 										efforts.delete(worker.sessionID);
+									for (const worker of group.workers)
+										tokenLimits.delete(worker.sessionID);
 								}),
 							),
 						);
@@ -171,17 +288,49 @@ export const setup = Effect.fn("packModels.setup")(function* (
 									),
 							),
 							Effect.flatMap((text) =>
-								ctx.session.synthetic({
-									sessionID: context.sessionID,
-									text,
-									description: "Pack coordinator finished",
-									metadata: {
-										source: SUBAGENT_TOOL_NAME,
-										childID: group.groupSessionID,
-										agent: group.agentId,
-										state: "completed",
-									},
-									resume: true,
+								Effect.gen(function* () {
+									// Parent history may have grown while a background pack was running.
+									const budget = yield* parentResultBudget(
+										ctx,
+										context.sessionID,
+										pack.consensus,
+										parentSnapshots.get(context.sessionID),
+									);
+									if (budget.tokens < 64) {
+										yield* ctx.session.synthetic({
+											sessionID: context.sessionID,
+											text: insufficientParentBudgetNotice(
+												group.groupSessionID,
+												budget.tokens,
+											),
+											description: "Pack coordinator finished",
+											metadata: {
+												source: SUBAGENT_TOOL_NAME,
+												childID: group.groupSessionID,
+												agent: group.agentId,
+												state: "completed",
+											},
+											resume: true,
+										});
+										return;
+									}
+									yield* ctx.session.synthetic({
+										sessionID: context.sessionID,
+										text: limitResultText(
+											text,
+											budget.tokens,
+											budget.estimator,
+											group.groupSessionID,
+										),
+										description: "Pack coordinator finished",
+										metadata: {
+											source: SUBAGENT_TOOL_NAME,
+											childID: group.groupSessionID,
+											agent: group.agentId,
+											state: "completed",
+										},
+										resume: true,
+									});
 								}),
 							),
 							Effect.catchCauseIf(

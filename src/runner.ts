@@ -10,6 +10,7 @@ import type {
 } from "./group-manager.ts";
 import { modelRef, resolvePackWorkers } from "./models.ts";
 import { SessionID } from "./session-id.ts";
+import { tokenEstimatorWarning } from "./token-budget.ts";
 
 /** Decoded subagent arguments relevant to pack routing and execution. */
 export interface PackInput {
@@ -78,7 +79,19 @@ export const prepareGroup = Effect.fn("prepareGroup")(function* (
 		yield* Effect.logWarning(
 			`Pack ${packId}: inter-agent messaging is not implemented in Phase 1; workers run independently`,
 		);
-	if (existing) return { group: existing, pack };
+	if (existing) {
+		let changed = false;
+		for (const worker of existing.workers) {
+			const warning = tokenEstimatorWarning(worker.providerID, worker.modelID);
+			if (warning && !existing.warnings?.includes(warning)) {
+				existing.warnings = [...(existing.warnings ?? []), warning];
+				changed = true;
+				yield* Effect.logWarning(warning);
+			}
+		}
+		if (changed) yield* manager.save(existing);
+		return { group: existing, pack };
+	}
 	if (input.sessionID)
 		return yield* Effect.fail(
 			new Error(`Not a valid pack group sessionID: ${input.sessionID}`),

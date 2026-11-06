@@ -58,7 +58,9 @@ Validated at plugin startup using `effect/Schema`:
   - `enabled` (boolean, default `false`)
   - `model` (string | object | null, default `null`): Model used for synthesis when `enabled: true`.
   - `timeoutMs` (number, default `120000`)
-  - `maxInputChars` (number, default `60000`)
+  - `maxInputToken` (positive integer | percentage string, default `"25%"`): Consensus evidence token cap or input-capacity share.
+  - `maxResultToken` (positive integer | percentage string, default `"25%"`): Parent result token cap or remaining-capacity share.
+  - Deprecated explicit overrides: `maxInputTokens`, `maxResultTokens`, `parentReserveTokens`, `maxInputChars`. None applies by default; supplied values remain honored with a startup warning.
 - `packs`: Record of `<packName>` to Pack Definition:
   - `maxConcurrency` (optional number override)
   - `timeoutMs` (optional number override)
@@ -82,16 +84,20 @@ Validated at plugin startup using `effect/Schema`:
      - First check if the resolved `Model.Info` in `ctx.model.list()` defines a matching native variant in `model.variants`. If so, pass `variant: effort` to `ctx.session.switchModel`.
      - Otherwise, record `effort` on the worker state and apply `event.options.reasoningEffort = effort` in `ctx.session.hook("context")` for that worker's `sessionID`.
 
-### 2.3 Consensus Model Resolution & Fair Truncation
+### 2.3 Token Limits, Consensus Model Resolution & Fair Truncation
 1. **Model Hierarchy**:
    - Pack-level `packs[packName].consensus.model`
    - Global `options.consensus.model`
    - Fallback: The **parent session's active model** (`parentSession.model`).
-2. **Fair Per-Worker Input Budgeting (`maxInputChars`)**:
-   - Suppose `maxInputChars` is 60,000 and $K$ workers succeeded.
-   - Sort worker outputs by length ascending. Each remaining worker gets an equal share of the remaining character budget (`remainingBudget / remainingWorkers`).
+2. **Worker Request Preflight**:
+   - Estimate complete worker requests with `ai-tokenizer`, including system content, history, tool definitions and structural overhead.
+   - Reject requests above 85% of the catalog model's `limit.input` (or `limit.context - limit.output`) to allow for estimator and provider overhead.
+3. **Fair Per-Worker Input Budgeting (`maxInputToken`)**:
+   - Apply legacy ceilings only when explicitly configured.
+   - Reserve fixed synthesis prompt overhead from 85% of the model input limit, then cap evidence by `maxInputToken`: an absolute count or a percentage of the declared input allowance.
+   - Sort worker outputs by estimated tokens ascending. Each remaining worker gets an equal share of the remaining token budget.
    - Workers shorter than their quota use only their actual length and donate their unused budget to longer worker responses. Workers exceeding their fair share are truncated cleanly with a `[...truncated]` marker.
-3. **Stateless Execution & Fallback**:
+4. **Stateless Execution & Fallback**:
    - Execute synthesis via `ctx.experimental.generate.text({ model, prompt })` bounded by `consensus.timeoutMs`.
    - Log the synthesized result into the Coordinator Session via `ctx.session.synthetic({ sessionID: coordinatorID, text, resume: false })`.
    - If synthesis fails or times out, log a warning and return the direct multi-worker output with a warning banner so no worker results are lost.

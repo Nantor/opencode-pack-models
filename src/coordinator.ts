@@ -14,7 +14,12 @@ import type { SessionMessage } from "@opencode/schema/session-message";
 import type { Tool } from "@opencode/schema/tool";
 import { Cause, Effect, Semaphore } from "effect";
 import type { Config, PackConfig } from "./config.ts";
-import { type WorkerResult, fairTruncate, formatDirect } from "./consensus.ts";
+import {
+	type WorkerResult,
+	fairTruncate,
+	fairTruncateTokens,
+	formatDirect,
+} from "./consensus.ts";
 import {
 	CONSENSUS_SYSTEM_PROMPT,
 	COORDINATOR_AGENT_NAME,
@@ -28,9 +33,20 @@ import {
 } from "./constants.ts";
 import type { PackGroupManager, PackGroupRecord } from "./group-manager.ts";
 import { modelRef, resolveModel } from "./models.ts";
+import {
+	type ParentContextSnapshot,
+	parentResultBudget,
+} from "./parent-budget.ts";
 import { type PackInput, finalAssistantText, runWorker } from "./runner.ts";
 import { scriptedModel, scriptedUsage } from "./scripted-model.ts";
 import { SessionID } from "./session-id.ts";
+import {
+	INPUT_TOKEN_SAFETY_RATIO,
+	limitResultText,
+	resolveTokenLimit,
+	tokenEstimator,
+	tokenEstimatorWarning,
+} from "./token-budget.ts";
 
 interface CoordinatorTurn {
 	group: PackGroupRecord;
@@ -44,92 +60,153 @@ interface CoordinatorTurn {
 }
 
 /** Only this operation can call an external coordinator LLM. */
-const finalCoordinatorAnswer = Effect.fn("packModels.finalAnswer")(function* (
-	ctx: Plugin.Context,
-	config: Config,
-	turn: CoordinatorTurn,
-) {
-	const results = turn.group.workers
-		.map((w) => turn.results.get(w.sessionID))
-		.filter((r): r is WorkerResult => !!r);
-	const warnings = (turn.group.warnings ?? [])
-		.map((w) => `Warning: ${w}`)
-		.join("\n");
-	const direct = `${warnings}${warnings ? "\n\n" : ""}${formatDirect(results)}`;
-	if (
-		!turn.pack.consensus.enabled ||
-		!results.some((r) => r.status === "succeeded")
-	)
-		return direct;
-	return yield* Effect.gen(function* () {
-		let model: Model.Ref | undefined;
-		if (turn.pack.consensus.model) {
-			const resolved = yield* resolveModel(
-				ctx,
-				turn.pack.consensus.model,
-				config.packProviderId,
+const generateCoordinatorAnswer = Effect.fn("packModels.generateAnswer")(
+	function* (
+		ctx: Plugin.Context,
+		config: Config,
+		turn: CoordinatorTurn,
+		resultTokens: number,
+	) {
+		const results = turn.group.workers
+			.map((w) => turn.results.get(w.sessionID))
+			.filter((r): r is WorkerResult => !!r);
+		const warnings = (turn.group.warnings ?? [])
+			.map((w) => `Warning: ${w}`)
+			.join("\n");
+		const direct = `${warnings}${warnings ? "\n\n" : ""}${formatDirect(results)}`;
+		if (
+			!turn.pack.consensus.enabled ||
+			!results.some((r) => r.status === "succeeded")
+		)
+			return direct;
+		return yield* Effect.gen(function* () {
+			let model: Model.Ref | undefined;
+			if (turn.pack.consensus.model) {
+				const resolved = yield* resolveModel(
+					ctx,
+					turn.pack.consensus.model,
+					config.packProviderId,
+				);
+				if (!resolved || resolved.useHookEffort)
+					return yield* Effect.fail(
+						new Error(
+							"Consensus model unavailable or effort is not a native variant",
+						),
+					);
+				model = modelRef(resolved);
+			} else {
+				const parent = yield* ctx.session.get({
+					sessionID: SessionID.make(turn.group.parentSessionID),
+				});
+				model = parent.model;
+				if (!model && parent.agent)
+					model = (yield* ctx.agent.get({ agentID: parent.agent })).data.model;
+				if (!model) {
+					const fallback = (yield* ctx.model.default()).data;
+					if (fallback)
+						model = { providerID: fallback.providerID, id: fallback.id };
+				}
+			}
+			if (!model || model.providerID === config.packProviderId)
+				return yield* Effect.fail(
+					new Error("Consensus requires a real chat model"),
+				);
+			const catalogModel = (yield* ctx.model.list()).data.find(
+				(candidate) =>
+					candidate.providerID === model.providerID &&
+					candidate.id === model.id,
 			);
-			if (!resolved || resolved.useHookEffort)
+			if (!catalogModel)
+				return yield* Effect.fail(
+					new Error("Consensus model is not in the catalog"),
+				);
+			const estimator = tokenEstimator(model.providerID, model.id);
+			const estimatorWarning = tokenEstimatorWarning(
+				model.providerID,
+				model.id,
+				estimator,
+			);
+			if (estimatorWarning) yield* Effect.logWarning(estimatorWarning);
+			const newEstimatorWarning =
+				estimatorWarning && !turn.group.warnings?.includes(estimatorWarning)
+					? estimatorWarning
+					: undefined;
+			const successful = results.filter((r) => r.status === "succeeded");
+			// Legacy character limits are honored only when explicitly configured.
+			const evidence = successful.map((r) => r.text);
+			const charLimited =
+				turn.pack.consensus.maxInputChars === null
+					? evidence
+					: fairTruncate(evidence, turn.pack.consensus.maxInputChars);
+			// Reserve instructions, the unchanged original task and worker labels before
+			// dividing the remaining model input allowance among evidence bodies.
+			// The host text API has no output-token parameter; this is guidance only.
+			const concise = `Keep the answer concise: target at most ${resultTokens} tokens measured by the parent model. Preserve essential conclusions and uncertainty.`;
+			const fixedPrompt = `${CONSENSUS_SYSTEM_PROMPT}\n${concise}\n\nOriginal task:\n${turn.prompt}\n\nWorker evidence:\n${successful.map((r) => `${r.worker.label}:\n`).join("\n\n")}`;
+			const declaredInput =
+				catalogModel.limit.input ??
+				Math.max(0, catalogModel.limit.context - catalogModel.limit.output);
+			const safeInput = Math.floor(declaredInput * INPUT_TOKEN_SAFETY_RATIO);
+			const evidenceBudget = Math.min(
+				resolveTokenLimit(declaredInput, turn.pack.consensus.maxInputToken),
+				Math.max(0, safeInput - estimator.count(fixedPrompt)),
+			);
+			if (evidenceBudget === 0)
 				return yield* Effect.fail(
 					new Error(
-						"Consensus model unavailable or effort is not a native variant",
+						"Consensus model has no remaining capacity for worker evidence",
 					),
 				);
-			model = modelRef(resolved);
-		} else {
-			const parent = yield* ctx.session.get({
-				sessionID: SessionID.make(turn.group.parentSessionID),
-			});
-			model = parent.model;
-			if (!model && parent.agent)
-				model = (yield* ctx.agent.get({ agentID: parent.agent })).data.model;
-			if (!model) {
-				const fallback = (yield* ctx.model.default()).data;
-				if (fallback)
-					model = { providerID: fallback.providerID, id: fallback.id };
-			}
-		}
-		if (!model || model.providerID === config.packProviderId)
-			return yield* Effect.fail(
-				new Error("Consensus requires a real chat model"),
+			const texts = fairTruncateTokens(
+				charLimited,
+				evidenceBudget,
+				estimator.count,
+				estimator.truncate,
 			);
-		const successful = results.filter((r) => r.status === "succeeded");
-		const texts = fairTruncate(
-			successful.map((r) => r.text),
-			turn.pack.consensus.maxInputChars,
+			const synthesisPrompt = `${CONSENSUS_SYSTEM_PROMPT}\n${concise}\n\nOriginal task:\n${turn.prompt}\n\nWorker evidence:\n${successful.map((r, i) => `${r.worker.label}:\n${texts[i]}`).join("\n\n")}`;
+			// Recount the assembled prompt because token merges can cross boundaries.
+			// Never truncate the original task; fail synthesis and retain worker reports.
+			if (estimator.count(synthesisPrompt) > safeInput)
+				return yield* Effect.fail(
+					new Error(
+						`Consensus prompt overhead exceeds the safe input limit for ${model.providerID}/${model.id}`,
+					),
+				);
+			const output = yield* ctx.experimental.generate
+				.text({
+					model,
+					prompt: synthesisPrompt,
+				})
+				.pipe(Effect.timeout(turn.pack.consensus.timeoutMs));
+			if (!output.text.trim())
+				return yield* Effect.fail(new Error("Consensus returned empty text"));
+			const diagnostics = results.filter((r) => r.status !== "succeeded");
+			return [
+				warnings,
+				newEstimatorWarning ? `Warning: ${newEstimatorWarning}` : "",
+				diagnostics.length ? formatDirect(diagnostics) : "",
+				output.text,
+			]
+				.filter(Boolean)
+				.join("\n\n");
+		}).pipe(
+			Effect.catchCauseIf(
+				(cause) => !Cause.hasInterrupts(cause),
+				() =>
+					Effect.succeed(
+						`Warning: consensus synthesis failed; returning individual worker responses.\n\n${direct}`,
+					),
+			),
 		);
-		const output = yield* ctx.experimental.generate
-			.text({
-				model,
-				prompt: `${CONSENSUS_SYSTEM_PROMPT}\n\nOriginal task:\n${turn.prompt}\n\nWorker evidence:\n${successful.map((r, i) => `${r.worker.label}:\n${texts[i]}`).join("\n\n")}`,
-			})
-			.pipe(Effect.timeout(turn.pack.consensus.timeoutMs));
-		if (!output.text.trim())
-			return yield* Effect.fail(new Error("Consensus returned empty text"));
-		const diagnostics = results.filter((r) => r.status !== "succeeded");
-		return [
-			warnings,
-			diagnostics.length ? formatDirect(diagnostics) : "",
-			output.text,
-		]
-			.filter(Boolean)
-			.join("\n\n");
-	}).pipe(
-		Effect.catchCauseIf(
-			(cause) => !Cause.hasInterrupts(cause),
-			() =>
-				Effect.succeed(
-					`Warning: consensus synthesis failed; returning individual worker responses.\n\n${direct}`,
-				),
-		),
-	);
-});
+	},
+);
 
 /** Native coordinator tool calls are transcript entries; only execution is routed. */
 export function makeCoordinatorRuntime(
 	ctx: Plugin.Context,
 	manager: PackGroupManager["Service"],
 	config: Config,
+	parentSnapshots: ReadonlyMap<string, ParentContextSnapshot> = new Map(),
 ) {
 	const turns = new Map<string, CoordinatorTurn>();
 	const scriptedProviderID = `${config.packProviderId}${COORDINATOR_ID_SUFFIX}`;
@@ -240,7 +317,31 @@ export function makeCoordinatorRuntime(
 								// Memoize before awaiting: native retries can never trigger another
 								// external synthesis call in this turn.
 								turn.final ??= Effect.runPromise(
-									finalCoordinatorAnswer(ctx, config, turn),
+									Effect.gen(function* () {
+										const budget = yield* parentResultBudget(
+											ctx,
+											turn.group.parentSessionID,
+											turn.pack.consensus,
+											parentSnapshots.get(turn.group.parentSessionID),
+										);
+										if (budget.tokens < 64)
+											return insufficientParentBudgetNotice(
+												turn.group.groupSessionID,
+												budget.tokens,
+											);
+										const text = yield* generateCoordinatorAnswer(
+											ctx,
+											config,
+											turn,
+											budget.tokens,
+										);
+										return limitResultText(
+											text,
+											budget.tokens,
+											budget.estimator,
+											turn.group.groupSessionID,
+										);
+									}),
 									{ signal: options.abortSignal },
 								);
 								return {
@@ -460,6 +561,14 @@ export function makeCoordinatorRuntime(
 		);
 	});
 	return { install, dispatch, run };
+}
+
+/** Preserve completion and navigation even when a full result cannot fit. */
+export function insufficientParentBudgetNotice(
+	sessionID: string,
+	tokens: number,
+): string {
+	return `Pack completed, but the parent has insufficient result capacity (${tokens} estimated tokens). Compact the parent context and inspect the coordinator: ${sessionID}`;
 }
 
 /** Include persisted provider diagnostics without dumping headers or bodies. */

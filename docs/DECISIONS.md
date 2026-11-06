@@ -65,6 +65,6 @@
 - **D21 (Consensus Execution Method)**:
   - Use stateless `ctx.experimental.generate.text` for the consensus synthesis call and record the output in the Coordinator session via `ctx.session.synthetic(..., { resume: false })`.
 - **D22 (Fair Per-Worker Truncation for Consensus)**:
-  - Divide `consensus.maxInputChars` fairly across successful workers, redistributing unused character budget from shorter worker responses to longer ones before truncating.
+  - Divide the `consensus.maxInputToken` evidence budget fairly across workers. The two public budget controls accept positive integer token counts or percentage strings; defaults are `"25%"`. Legacy aliases are normalized with startup warnings.
 - **D23 (Worker System Instructions)**:
   - Leave worker system prompts 100% untouched in Phase 1; in Phase 2 (`enableInterAgentMessaging: true`), inject only a `<context key="pack-messaging">` instruction entry explaining the peer roster and messaging tools.

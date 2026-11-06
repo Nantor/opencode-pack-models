@@ -15,7 +15,13 @@ These values apply only when the corresponding option is omitted. Per-pack setti
 | `DEFAULT_CONSENSUS.enabled` | `false` | Opt in to a single tool-free synthesis request. |
 | `DEFAULT_CONSENSUS.model` | `null` | Resolve the parent's model, its agent model, then the workspace default at runtime. |
 | `DEFAULT_CONSENSUS.timeoutMs` | `120000` ms | Deadline for the synthesis request. Independent of the worker timeout. |
-| `DEFAULT_CONSENSUS.maxInputChars` | `60000` characters | Shared budget for successful worker response bodies, including truncation markers; not a token limit or a limit on the whole prompt. |
+| `DEFAULT_CONSENSUS.maxInputTokens` | `null` | Deprecated absolute evidence override; disabled unless explicitly supplied. |
+| `DEFAULT_CONSENSUS.maxInputToken` | `"25%"` | Evidence cap: positive integer tokens or percentage string of consensus input allowance. |
+| `DEFAULT_CONSENSUS.maxResultToken` | `"25%"` | Parent-result cap: positive integer tokens or percentage string of remaining usable parent capacity. |
+| `DEFAULT_CONSENSUS.maxInputPercentage` / `maxResultPercentage` | `25` | Deprecated numeric percentage aliases; only explicit values participate in normalization. |
+| `DEFAULT_CONSENSUS.maxResultTokens` | `null` | Deprecated absolute result override; disabled unless explicitly supplied. |
+| `DEFAULT_CONSENSUS.parentReserveTokens` | `null` | Automatic continuation reserve: 5% of safe parent capacity, capped at 4096 tokens. Explicit legacy overrides remain honored. |
+| `DEFAULT_CONSENSUS.maxInputChars` | `null` | Deprecated character ceiling; disabled unless explicitly supplied. |
 
 `DEFAULT_CONSENSUS` is frozen and copied during decoding. Overrides must never mutate shared defaults. An explicit per-pack `consensus.model: null` clears a globally configured model.
 
