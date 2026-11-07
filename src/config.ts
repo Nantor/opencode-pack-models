@@ -1,5 +1,6 @@
 import { Effect, Schema, SchemaGetter } from "effect";
 import {
+	CONSENSUS_SYSTEM_PROMPT,
 	DEFAULT_CONSENSUS,
 	DEFAULT_INTER_AGENT_MESSAGING_ENABLED,
 	DEFAULT_MAX_CONCURRENCY,
@@ -18,6 +19,7 @@ import {
 // is literal and is not interpreted as a wildcard by model resolution.
 const Identifier = Schema.String.check(Schema.isPattern(/^[^/#\s]+$/));
 const NonEmpty = Schema.String.check(Schema.isMinLength(1));
+const NonBlank = Schema.String.check(Schema.isPattern(/\S/));
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 const Percentage = Schema.Number.check(
 	Schema.isGreaterThan(0),
@@ -68,6 +70,7 @@ export const ModelInput = Schema.Union([
 const ConsensusSchema = Schema.Struct({
 	enabled: Schema.optionalKey(Schema.Boolean),
 	model: Schema.optionalKey(Schema.Union([ModelInput, Schema.Null])),
+	systemPrompt: Schema.optionalKey(Schema.Union([NonBlank, Schema.Null])),
 	timeoutMs: Schema.optionalKey(PositiveInt),
 	maxInputToken: Schema.optionalKey(TokenLimitSchema),
 	maxResultToken: Schema.optionalKey(TokenLimitSchema),
@@ -107,6 +110,7 @@ export const parseModelSpec = Schema.decodeUnknownSync(ModelInput);
 export interface ConsensusConfig {
 	enabled: boolean;
 	model: ModelSpec | null;
+	systemPrompt: string;
 	timeoutMs: number;
 	/** Absolute evidence tokens or a percentage of consensus input capacity. */
 	maxInputToken: TokenLimit;
@@ -231,6 +235,7 @@ export const decodeConfig = Effect.fn("decodeConfig")(function* (
 					consensus: {
 						...consensus,
 						model: consensus.model ?? null,
+						systemPrompt: consensus.systemPrompt ?? CONSENSUS_SYSTEM_PROMPT,
 					},
 				},
 			];

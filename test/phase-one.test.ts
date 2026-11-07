@@ -8,6 +8,7 @@ import { Effect, Fiber, Schema, type Types } from "effect";
 import { setup } from "../src";
 import { decodeConfig, parseModelSpec } from "../src/config.ts";
 import { fairTruncate, fairTruncateTokens } from "../src/consensus.ts";
+import { CONSENSUS_SYSTEM_PROMPT } from "../src/constants.ts";
 import { makeGroupManager } from "../src/group-manager.ts";
 import { resolvePackWorkers } from "../src/models.ts";
 import {
@@ -64,6 +65,7 @@ export function harness(options: Record<string, unknown> = {}) {
 		  }) => Effect.Effect<void>)
 		| undefined;
 	let synthesisCalls = 0;
+	const synthesisPrompts: string[] = [];
 	const prompts: string[] = [];
 	const seenEfforts: unknown[] = [];
 	const agents = new Map<string, Types.DeepMutable<Agent.Info>>();
@@ -343,8 +345,9 @@ export function harness(options: Record<string, unknown> = {}) {
 		},
 		experimental: {
 			generate: {
-				text: () => {
+				text: (input: { prompt: string }) => {
 					synthesisCalls++;
+					synthesisPrompts.push(input.prompt);
 					return synthesisFails
 						? Effect.fail(new Error("synthesis failed"))
 						: Effect.succeed({ text: "Synthesized answer" });
@@ -362,6 +365,7 @@ export function harness(options: Record<string, unknown> = {}) {
 		prompts,
 		seenEfforts,
 		synthesisCalls: () => synthesisCalls,
+		synthesisPrompts,
 		hooks,
 		setMode: (value: typeof mode) => {
 			mode = value;
@@ -411,6 +415,7 @@ describe("Phase 1 configuration and resolution", () => {
 		expect(config.packs.x?.consensus).toEqual({
 			enabled: true,
 			model: { provider: "p", model: "A*" },
+			systemPrompt: CONSENSUS_SYSTEM_PROMPT,
 			timeoutMs: 120000,
 			maxInputToken: "25%",
 			maxResultToken: "25%",
@@ -428,6 +433,26 @@ describe("Phase 1 configuration and resolution", () => {
 			{ packProviderId: "bad/id", packs: {} },
 			{ packProviderId: "p", maxConcurrency: 0, packs: {} },
 			{ packProviderId: "p", packs: { x: { models: ["missing-provider"] } } },
+			{
+				packProviderId: "p",
+				consensus: { systemPrompt: "" },
+				packs: { x: { models: ["p/A*"] } },
+			},
+			{
+				packProviderId: "p",
+				consensus: { systemPrompt: "   \n\t  " },
+				packs: { x: { models: ["p/A*"] } },
+			},
+			{
+				packProviderId: "p",
+				consensus: { systemPrompt: undefined },
+				packs: { x: { models: ["p/A*"] } },
+			},
+			{
+				packProviderId: "p",
+				consensus: { systemPrompt: 123 },
+				packs: { x: { models: ["p/A*"] } },
+			},
 		]) {
 			expect(
 				await Effect.runPromise(decodeConfig(invalid).pipe(Effect.result)),
@@ -671,7 +696,12 @@ describe("Phase 1 plugin execution", () => {
 	});
 	test("consensus returns only summary and falls back on synthesis errors", async () => {
 		for (const fail of [false, true]) {
-			const h = harness({ consensus: { enabled: true } });
+			const h = harness({
+				consensus: {
+					enabled: true,
+					systemPrompt: "Custom synthesis instructions.",
+				},
+			});
 			if (fail) h.failSynthesis();
 			await Effect.runPromise(
 				Effect.scoped(
@@ -683,6 +713,12 @@ describe("Phase 1 plugin execution", () => {
 						});
 						expect(result.content).toContain(
 							fail ? "Warning: consensus" : "Synthesized answer",
+						);
+						expect(h.synthesisPrompts[0]).toStartWith(
+							"Custom synthesis instructions.\n",
+						);
+						expect(h.synthesisPrompts[0]).not.toContain(
+							CONSENSUS_SYSTEM_PROMPT,
 						);
 						if (!fail) expect(result.content).not.toContain("Answer");
 					}),

@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { decodeConfig } from "../src/config.ts";
-import { DEFAULT_CONSENSUS } from "../src/constants.ts";
+import {
+	CONSENSUS_SYSTEM_PROMPT,
+	DEFAULT_CONSENSUS,
+} from "../src/constants.ts";
 
 test("configuration preserves documented defaults for every pack", async () => {
 	const config = await Effect.runPromise(
@@ -19,6 +22,7 @@ test("configuration preserves documented defaults for every pack", async () => {
 			consensus: {
 				enabled: false,
 				model: null,
+				systemPrompt: CONSENSUS_SYSTEM_PROMPT,
 				timeoutMs: 120_000,
 				maxInputTokens: null,
 				maxInputChars: null,
@@ -34,7 +38,12 @@ test("pack overrides win without changing global settings or shared defaults", a
 			maxConcurrency: 3,
 			timeoutMs: 500,
 			maxWorkersPerRun: 7,
-			consensus: { enabled: true, model: "p/synthesis", timeoutMs: 800 },
+			consensus: {
+				enabled: true,
+				model: "p/synthesis",
+				systemPrompt: "Global consensus prompt",
+				timeoutMs: 800,
+			},
 			packs: {
 				inherited: { models: ["p/a"] },
 				overridden: {
@@ -42,7 +51,16 @@ test("pack overrides win without changing global settings or shared defaults", a
 					maxConcurrency: 1,
 					timeoutMs: 200,
 					enableInterAgentMessaging: true,
-					consensus: { enabled: false, model: null, maxInputChars: 50 },
+					consensus: {
+						enabled: false,
+						model: null,
+						systemPrompt: "Pack consensus prompt",
+						maxInputChars: 50,
+					},
+				},
+				resetPrompt: {
+					models: ["p/c"],
+					consensus: { systemPrompt: null },
 				},
 			},
 		}),
@@ -54,6 +72,7 @@ test("pack overrides win without changing global settings or shared defaults", a
 		consensus: {
 			enabled: true,
 			model: { provider: "p", model: "synthesis" },
+			systemPrompt: "Global consensus prompt",
 			timeoutMs: 800,
 			maxInputTokens: null,
 			maxInputChars: null,
@@ -66,15 +85,20 @@ test("pack overrides win without changing global settings or shared defaults", a
 		consensus: {
 			enabled: false,
 			model: null,
+			systemPrompt: "Pack consensus prompt",
 			timeoutMs: 800,
 			maxInputTokens: null,
 			maxInputChars: 50,
 		},
 	});
+	expect(config.packs.resetPrompt?.consensus.systemPrompt).toBe(
+		CONSENSUS_SYSTEM_PROMPT,
+	);
 	expect(Object.isFrozen(DEFAULT_CONSENSUS)).toBe(true);
 	expect(DEFAULT_CONSENSUS).toEqual({
 		enabled: false,
 		model: null,
+		systemPrompt: CONSENSUS_SYSTEM_PROMPT,
 		timeoutMs: 120_000,
 		maxInputToken: "25%",
 		maxResultToken: "25%",
