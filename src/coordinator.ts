@@ -21,7 +21,6 @@ import {
 	formatDirect,
 } from "./consensus.ts";
 import {
-	CONSENSUS_SYSTEM_PROMPT,
 	COORDINATOR_AGENT_NAME,
 	COORDINATOR_ID_SUFFIX,
 	COORDINATOR_MODEL_ID,
@@ -141,8 +140,9 @@ const generateCoordinatorAnswer = Effect.fn("packModels.generateAnswer")(
 			// Reserve instructions, the unchanged original task and worker labels before
 			// dividing the remaining model input allowance among evidence bodies.
 			// The host text API has no output-token parameter; this is guidance only.
+			const systemPrompt = turn.pack.consensus.systemPrompt;
 			const concise = `Keep the answer concise: target at most ${resultTokens} tokens measured by the parent model. Preserve essential conclusions and uncertainty.`;
-			const fixedPrompt = `${CONSENSUS_SYSTEM_PROMPT}\n${concise}\n\nOriginal task:\n${turn.prompt}\n\nWorker evidence:\n${successful.map((r) => `${r.worker.label}:\n`).join("\n\n")}`;
+			const fixedPrompt = `${systemPrompt}\n${concise}\n\nOriginal task:\n${turn.prompt}\n\nWorker evidence:\n${successful.map((r) => `${r.worker.label}:\n`).join("\n\n")}`;
 			const declaredInput =
 				catalogModel.limit.input ??
 				Math.max(0, catalogModel.limit.context - catalogModel.limit.output);
@@ -163,7 +163,7 @@ const generateCoordinatorAnswer = Effect.fn("packModels.generateAnswer")(
 				estimator.count,
 				estimator.truncate,
 			);
-			const synthesisPrompt = `${CONSENSUS_SYSTEM_PROMPT}\n${concise}\n\nOriginal task:\n${turn.prompt}\n\nWorker evidence:\n${successful.map((r, i) => `${r.worker.label}:\n${texts[i]}`).join("\n\n")}`;
+			const synthesisPrompt = `${systemPrompt}\n${concise}\n\nOriginal task:\n${turn.prompt}\n\nWorker evidence:\n${successful.map((r, i) => `${r.worker.label}:\n${texts[i]}`).join("\n\n")}`;
 			// Recount the assembled prompt because token merges can cross boundaries.
 			// Never truncate the original task; fail synthesis and retain worker reports.
 			if (estimator.count(synthesisPrompt) > safeInput)

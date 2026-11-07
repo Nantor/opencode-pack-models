@@ -120,6 +120,7 @@ Register the plugin and define your model packs in your project's `opencode.json
 | `maxWorkersPerRun` | Global | `16` | Maximum number of resolved, available workers per run (duplicate entries count independently). |
 | `consensus.enabled` | Global / Per-pack | `false` | When `true`, runs a single tool-free synthesis call over all successful worker responses. |
 | `consensus.model` | Global / Per-pack | `null` | Model used for synthesis. When `null`, falls back to the parent session's active model, agent model, or workspace default. |
+| `consensus.systemPrompt` | Global / Per-pack | `CONSENSUS_SYSTEM_PROMPT` | Custom synthesis system instructions replacing `CONSENSUS_SYSTEM_PROMPT`. Set to `null` in a pack to reset a global override back to the default. |
 | `consensus.timeoutMs` | Global / Per-pack | `120000` | Timeout in milliseconds for the consensus synthesis request. |
 | `consensus.maxInputToken` | Global / Per-pack | `"25%"` | Positive integer evidence-token cap, or percentage string of the consensus model's input allowance; always bounded by space after instructions. |
 | `consensus.maxResultToken` | Global / Per-pack | `"25%"` | Positive integer parent-result token cap, or percentage string of the parent's remaining usable capacity. |

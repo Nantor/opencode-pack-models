@@ -57,6 +57,7 @@ Validated at plugin startup using `effect/Schema`:
 - `consensus`:
   - `enabled` (boolean, default `false`)
   - `model` (string | object | null, default `null`): Model used for synthesis when `enabled: true`.
+  - `systemPrompt` (non-blank string | null, default `CONSENSUS_SYSTEM_PROMPT`): Custom synthesis instructions replacing `CONSENSUS_SYSTEM_PROMPT` (`null` resets to default).
   - `timeoutMs` (number, default `120000`)
   - `maxInputToken` (positive integer | percentage string, default `"25%"`): Consensus evidence token cap or input-capacity share.
   - `maxResultToken` (positive integer | percentage string, default `"25%"`): Parent result token cap or remaining-capacity share.
