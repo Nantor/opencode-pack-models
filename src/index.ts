@@ -16,11 +16,11 @@ import {
 	type ParentContextSnapshot,
 	parentResultBudget,
 } from "./parent-budget.ts";
-import { type PackInput, formatPackOverview, prepareGroup } from "./runner.ts";
+import { formatPackOverview, type PackInput, prepareGroup } from "./runner.ts";
 import { SessionID } from "./session-id.ts";
 import {
-	INPUT_TOKEN_SAFETY_RATIO,
 	estimateRequestTokens,
+	INPUT_TOKEN_SAFETY_RATIO,
 	limitResultText,
 	tokenEstimator,
 } from "./token-budget.ts";
@@ -74,7 +74,7 @@ export const setup = Effect.fn("packModels.setup")(function* (
 		Effect.gen(function* () {
 			const limit = tokenLimits.get(event.sessionID);
 			const effort = efforts.get(event.sessionID);
-			if (effort) event.options.reasoningEffort = effort;
+			if (effort) event.options["reasoningEffort"] = effort;
 			// Internal worker requests are estimated once below and never enter the
 			// parent cache. Coordinator requests use the local scripted provider.
 			if (
@@ -127,7 +127,10 @@ export const setup = Effect.fn("packModels.setup")(function* (
 	yield* ctx.tool.transform((editor: ToolEditor) => {
 		editor.update(SUBAGENT_TOOL_NAME, (tool) => {
 			const original = tool.execute;
-			tool.execute = (raw: unknown, context: Tool.Context) =>
+			tool.execute = (
+				raw: unknown,
+				context: Tool.Context,
+			): ReturnType<Tool.Info["execute"]> =>
 				Effect.gen(function* () {
 					const input: PackInput =
 						yield* Schema.decodeUnknownEffect(SubagentInput)(raw);

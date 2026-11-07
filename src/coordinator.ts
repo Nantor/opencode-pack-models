@@ -12,13 +12,13 @@ import type { SessionContext } from "@opencode/plugin/effect/session";
 import { Error as ToolError } from "@opencode/plugin/promise/tool";
 import type { SessionMessage } from "@opencode/schema/session-message";
 import type { Tool } from "@opencode/schema/tool";
-import { Cause, Effect, Semaphore } from "effect";
+import { Cause, Effect, type Scope, Semaphore } from "effect";
 import type { Config, PackConfig } from "./config.ts";
 import {
-	type WorkerResult,
 	fairTruncate,
 	fairTruncateTokens,
 	formatDirect,
+	type WorkerResult,
 } from "./consensus.ts";
 import {
 	COORDINATOR_AGENT_NAME,
@@ -36,7 +36,7 @@ import {
 	type ParentContextSnapshot,
 	parentResultBudget,
 } from "./parent-budget.ts";
-import { type PackInput, finalAssistantText, runWorker } from "./runner.ts";
+import { finalAssistantText, type PackInput, runWorker } from "./runner.ts";
 import { scriptedModel, scriptedUsage } from "./scripted-model.ts";
 import { SessionID } from "./session-id.ts";
 import {
@@ -201,13 +201,26 @@ const generateCoordinatorAnswer = Effect.fn("packModels.generateAnswer")(
 	},
 );
 
+export interface CoordinatorRuntime {
+	install: Effect.Effect<void, never, Scope.Scope>;
+	dispatch: (
+		input: PackInput,
+		context: Tool.Context,
+	) => ReturnType<Tool.Info["execute"]> | undefined;
+	run: (
+		group: PackGroupRecord,
+		pack: PackConfig,
+		prompt: string,
+	) => Effect.Effect<string, unknown>;
+}
+
 /** Native coordinator tool calls are transcript entries; only execution is routed. */
 export function makeCoordinatorRuntime(
 	ctx: Plugin.Context,
 	manager: PackGroupManager["Service"],
 	config: Config,
 	parentSnapshots: ReadonlyMap<string, ParentContextSnapshot> = new Map(),
-) {
+): CoordinatorRuntime {
 	const turns = new Map<string, CoordinatorTurn>();
 	const scriptedProviderID = `${config.packProviderId}${COORDINATOR_ID_SUFFIX}`;
 	const coordinatorAgent = Agent.ID.make(scriptedProviderID);
@@ -404,7 +417,10 @@ export function makeCoordinatorRuntime(
 		);
 	});
 
-	const dispatch = (input: PackInput, context: Tool.Context) => {
+	const dispatch = (
+		input: PackInput,
+		context: Tool.Context,
+	): ReturnType<Tool.Info["execute"]> | undefined => {
 		const turn = turns.get(context.sessionID);
 		if (!turn) return undefined;
 		return Effect.gen(function* () {

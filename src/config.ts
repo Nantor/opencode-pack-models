@@ -195,7 +195,9 @@ export const decodeConfig = Effect.fn("decodeConfig")(function* (
 	};
 	// Normalize each scope separately so a pack's old alias can override a global
 	// new setting. Within one scope the new singular name always takes precedence.
-	const limitsFor = (settings: typeof options.consensus) => ({
+	const limitsFor = (
+		settings: typeof options.consensus,
+	): Partial<Pick<ConsensusConfig, "maxInputToken" | "maxResultToken">> => ({
 		...(settings?.maxInputToken !== undefined
 			? { maxInputToken: settings.maxInputToken }
 			: settings?.maxInputPercentage !== undefined

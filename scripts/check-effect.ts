@@ -71,7 +71,7 @@ function parseVersion(v: string): SemVer {
 	const [core, ...rest] = cleaned.split("-");
 	const pre = rest.join("-") ? rest.join("-").split(".") : [];
 	const parts = (core ?? "").split(".");
-	const num = (s: string | undefined, dflt = 0) => {
+	const num = (s: string | undefined, dflt = 0): number => {
 		if (s === undefined || s === "" || s === "x" || s === "X" || s === "*")
 			return dflt;
 		const n = Number.parseInt(s, 10);
@@ -179,12 +179,16 @@ function satisfiesOne(v: SemVer, cmp: string): boolean {
 const pluginPkg = readJson("node_modules/@opencode/plugin/package.json");
 const myPkg = readJson("package.json");
 
-const pluginVersion = String(pluginPkg.version ?? "unknown");
+const pluginVersion = String(pluginPkg["version"] ?? "unknown");
 const pluginEffect = String(
-	(pluginPkg.dependencies as Record<string, unknown> | undefined)?.effect ?? "",
+	(pluginPkg["dependencies"] as Record<string, unknown> | undefined)?.[
+		"effect"
+	] ?? "",
 );
 const myPeer = String(
-	(myPkg.peerDependencies as Record<string, unknown> | undefined)?.effect ?? "",
+	(myPkg["peerDependencies"] as Record<string, unknown> | undefined)?.[
+		"effect"
+	] ?? "",
 );
 
 const missing: string[] = [];
@@ -193,7 +197,7 @@ if (!pluginEffect)
 if (!myPeer) missing.push("this package has no `effect` peerDependency");
 if (missing.length) fail(`${missing.join("; ")}.`);
 
-if (!pluginPkg.version) fail("`@opencode/plugin` has no `version`.");
+if (!pluginPkg["version"]) fail("`@opencode/plugin` has no `version`.");
 
 console.log(
 	`check-effect:\n   @opencode/plugin@${pluginVersion}  ->  effect ${pluginEffect}\n   our peerDependency          ->  effect ${myPeer}\n`,

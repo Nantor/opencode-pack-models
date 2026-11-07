@@ -25,14 +25,14 @@ test("skipped members remain visible with consensus, background replies and pers
 					expect(result.content).toContain(
 						"Warning: Skipped unavailable model: p/missing",
 					);
-					const groupID = String(result.metadata?.sessionID);
+					const groupID = String(result.metadata?.["sessionID"]);
 					expect(h.sessions.get(groupID)?.metadata).toMatchObject({
 						packModels: { role: "coordinator" },
 					});
 					const worker = [...h.sessions.values()].find(
 						(s) =>
-							s.metadata?.packModels &&
-							(s.metadata.packModels as { role?: string }).role === "worker",
+							s.metadata?.["packModels"] &&
+							(s.metadata["packModels"] as { role?: string }).role === "worker",
 					);
 					expect(worker?.metadata).toMatchObject({
 						packModels: { role: "worker", groupSessionID: groupID },
@@ -110,13 +110,13 @@ test("pack replies satisfy the native subagent structured output contract", asyn
 						background,
 					});
 					expect(result.output).toEqual({
-						sessionID: result.metadata?.sessionID,
+						sessionID: result.metadata?.["sessionID"],
 						status: background ? "running" : "completed",
 						output: background
 							? result.content
 							: (result.output as { output: string }).output,
 					});
-					expect(result.metadata?.status).toBe(
+					expect(result.metadata?.["status"]).toBe(
 						background ? "running" : "completed",
 					);
 				}),
@@ -252,7 +252,7 @@ test("empty worker answers cannot reuse intermediate narration", async () => {
 					const session = h.sessions.get(sessionID);
 					if (!session) throw new Error("Missing worker");
 					if (
-						(session.metadata?.packModels as { role?: string } | undefined)
+						(session.metadata?.["packModels"] as { role?: string } | undefined)
 							?.role === "coordinator"
 					)
 						return;
@@ -314,7 +314,7 @@ test("virtual pack references fail configuration, including unused global consen
 test("worker resolution uses one catalog snapshot and refuses virtual models at runtime", async () => {
 	const h = harness();
 	const config = await Effect.runPromise(decodeConfig(h.ctx.options));
-	const pack = config.packs.pair;
+	const pack = config.packs["pair"];
 	if (!pack) throw new Error("Missing pack");
 	let calls = 0;
 	const list = h.ctx.model.list;
@@ -377,7 +377,7 @@ test("invalid and worker follow-ups never spawn or delegate; conflicts are rejec
 					model: "packs/pair",
 					prompt: "first",
 				});
-				const groupID = first.metadata?.sessionID;
+				const groupID = first.metadata?.["sessionID"];
 				const workerID = [...h.sessions.keys()].find(
 					(id) => id !== "ses_parent" && id !== groupID,
 				);
@@ -502,7 +502,7 @@ test("cancellation during the coordinator final turn propagates without parent n
 				prompt(input).pipe(
 					Effect.andThen(
 						(
-							h.sessions.get(input.sessionID)?.metadata?.packModels as
+							h.sessions.get(input.sessionID)?.metadata?.["packModels"] as
 								| { role?: string }
 								| undefined
 						)?.role === "coordinator"
@@ -628,7 +628,7 @@ test("worker outcome diagnostics include provider error and messaging configurat
 				const result = yield* h.execute({ agent: "worker", prompt: "request" });
 				expect(result.content).toContain("429 provider rate limit");
 				const stored = h.stored.get(
-					`pack_group/${result.metadata?.sessionID}`,
+					`pack_group/${result.metadata?.["sessionID"]}`,
 				) as { enableInterAgentMessaging: boolean };
 				expect(stored.enableInterAgentMessaging).toBe(true);
 			}),

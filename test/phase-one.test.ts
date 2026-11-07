@@ -17,8 +17,45 @@ import {
 	tokenEstimatorWarning,
 } from "../src/token-budget.ts";
 
-// biome-ignore lint/suspicious/noExportsInTest: Shared in-memory plugin fixture for the review regression suite.
-export function harness(options: Record<string, unknown> = {}) {
+interface HarnessSession {
+	id: Session.ID;
+	model?: Model.Ref;
+	outcome?: "succeeded" | "failed";
+	messages: unknown[];
+	metadata?: Record<string, Schema.Json>;
+	agent?: Agent.ID;
+}
+
+interface HarnessAudit {
+	sessionID: string;
+	text: string;
+	resume: boolean;
+}
+
+type HarnessHook = (event: {
+	sessionID: string;
+	options: Record<string, unknown>;
+}) => Effect.Effect<void>;
+
+interface Harness {
+	ctx: Plugin.Context;
+	agents: Map<string, Types.DeepMutable<Agent.Info>>;
+	stored: Map<string, Schema.Json>;
+	sessions: Map<string, HarnessSession>;
+	audit: HarnessAudit[];
+	interrupted: string[];
+	prompts: string[];
+	seenEfforts: unknown[];
+	synthesisCalls: () => number;
+	synthesisPrompts: string[];
+	hooks: HarnessHook[];
+	setMode: (value: "success" | "fail" | "timeout") => void;
+	failSynthesis: () => void;
+	peak: () => number;
+	execute: (input: unknown) => ReturnType<Tool.Info["execute"]>;
+}
+
+export function harness(options: Record<string, unknown> = {}): Harness {
 	// Native subagent tools declare a structured output in addition to content.
 	// Enforce that contract at execution, just as the live host does.
 	const outputSchema = Schema.Struct({
@@ -27,23 +64,10 @@ export function harness(options: Record<string, unknown> = {}) {
 		output: Schema.String,
 	});
 	const stored = new Map<string, Schema.Json>();
-	const sessions = new Map<
-		string,
-		{
-			id: Session.ID;
-			model?: Model.Ref;
-			outcome?: "succeeded" | "failed";
-			messages: unknown[];
-			metadata?: Record<string, Schema.Json>;
-			agent?: Agent.ID;
-		}
-	>();
-	const audit: { sessionID: string; text: string; resume: boolean }[] = [];
+	const sessions = new Map<string, HarnessSession>();
+	const audit: HarnessAudit[] = [];
 	const interrupted: string[] = [];
-	const hooks: ((event: {
-		sessionID: string;
-		options: Record<string, unknown>;
-	}) => Effect.Effect<void>)[] = [];
+	const hooks: HarnessHook[] = [];
 	let executor: Tool.Info["execute"] = () =>
 		Effect.succeed({
 			output: {
@@ -124,12 +148,15 @@ export function harness(options: Record<string, unknown> = {}) {
 				Effect.sync(() => {
 					callback({
 						list: () => [...agents.values()],
-						get: (id) => agents.get(id),
+						get: (id: string) => agents.get(id),
 						default: () => {},
-						remove: (id) => {
+						remove: (id: string) => {
 							agents.delete(id);
 						},
-						update: (id, update) => {
+						update: (
+							id: string,
+							update: (agent: Types.DeepMutable<Agent.Info>) => void,
+						) => {
 							const agent =
 								agents.get(id) ?? Agent.Info.default(Agent.ID.make(id));
 							agents.set(id, agent);
@@ -187,7 +214,10 @@ export function harness(options: Record<string, unknown> = {}) {
 			switchAgent: ({
 				sessionID,
 				agent,
-			}: { sessionID: string; agent: Agent.ID }) =>
+			}: {
+				sessionID: string;
+				agent: Agent.ID;
+			}) =>
 				Effect.sync(() => {
 					const session = sessions.get(sessionID);
 					if (session) session.agent = agent;
@@ -195,7 +225,10 @@ export function harness(options: Record<string, unknown> = {}) {
 			switchModel: ({
 				sessionID,
 				model,
-			}: { sessionID: string; model: Model.Ref }) =>
+			}: {
+				sessionID: string;
+				model: Model.Ref;
+			}) =>
 				Effect.sync(() => {
 					const session = sessions.get(sessionID);
 					if (session) session.model = model;
@@ -206,7 +239,7 @@ export function harness(options: Record<string, unknown> = {}) {
 				Effect.gen(function* () {
 					const session = sessions.get(sessionID);
 					if (
-						(session?.metadata?.packModels as { role?: string } | undefined)
+						(session?.metadata?.["packModels"] as { role?: string } | undefined)
 							?.role === "coordinator"
 					) {
 						if (!session) throw new Error("Missing coordinator");
@@ -239,7 +272,7 @@ export function harness(options: Record<string, unknown> = {}) {
 							(part) => part.type === "tool-call",
 						);
 						const results = yield* Effect.forEach(
-							ctx.options.simulateMissingSubagent ? [] : calls,
+							ctx.options["simulateMissingSubagent"] ? [] : calls,
 							(call) =>
 								executor(JSON.parse(call.input), {
 									sessionID: Session.ID.make(sessionID),
@@ -281,14 +314,14 @@ export function harness(options: Record<string, unknown> = {}) {
 					prompts.push(text);
 					const event = { sessionID, options: {} as Record<string, unknown> };
 					for (const hook of hooks) yield* hook(event);
-					seenEfforts.push(event.options.reasoningEffort);
+					seenEfforts.push(event.options["reasoningEffort"]);
 					return {};
 				}),
 			wait: ({ sessionID }: { sessionID: string }) =>
 				Effect.gen(function* () {
 					if (
 						(
-							sessions.get(sessionID)?.metadata?.packModels as
+							sessions.get(sessionID)?.metadata?.["packModels"] as
 								| { role?: string }
 								| undefined
 						)?.role === "coordinator"
@@ -364,17 +397,17 @@ export function harness(options: Record<string, unknown> = {}) {
 		interrupted,
 		prompts,
 		seenEfforts,
-		synthesisCalls: () => synthesisCalls,
+		synthesisCalls: (): number => synthesisCalls,
 		synthesisPrompts,
 		hooks,
-		setMode: (value: typeof mode) => {
+		setMode: (value: typeof mode): void => {
 			mode = value;
 		},
-		failSynthesis: () => {
+		failSynthesis: (): void => {
 			synthesisFails = true;
 		},
-		peak: () => peak,
-		execute: (input: unknown) =>
+		peak: (): number => peak,
+		execute: (input: unknown): ReturnType<Tool.Info["execute"]> =>
 			executor(input, {
 				sessionID: Session.ID.make("ses_parent"),
 				agent: Agent.ID.make("build"),
@@ -411,8 +444,8 @@ describe("Phase 1 configuration and resolution", () => {
 				packs: { x: { models: ["p/A*"], consensus: { maxInputChars: 20 } } },
 			}),
 		);
-		expect(config.packs.x?.maxConcurrency).toBe(2);
-		expect(config.packs.x?.consensus).toEqual({
+		expect(config.packs["x"]?.maxConcurrency).toBe(2);
+		expect(config.packs["x"]?.consensus).toEqual({
 			enabled: true,
 			model: { provider: "p", model: "A*" },
 			systemPrompt: CONSENSUS_SYSTEM_PROMPT,
@@ -465,7 +498,7 @@ describe("Phase 1 configuration and resolution", () => {
 			packs: { x: { models: ["p/a*", "p/A*#high", "p/A*", "p/B"] } },
 		});
 		const config = await Effect.runPromise(decodeConfig(h.ctx.options));
-		const pack = config.packs.x;
+		const pack = config.packs["x"];
 		if (!pack) throw new Error("Missing test pack");
 		const workers = await Effect.runPromise(
 			resolvePackWorkers(h.ctx, pack, 2, "packs"),
@@ -566,7 +599,7 @@ describe("Phase 1 configuration and resolution", () => {
 			list: () => Effect.succeed({ data: [{ ...model, variants: [variant] }] }),
 		});
 		const config = await Effect.runPromise(decodeConfig(h.ctx.options));
-		const pack = config.packs.pair;
+		const pack = config.packs["pair"];
 		if (!pack) throw new Error("Missing test pack");
 		const workers = await Effect.runPromise(
 			resolvePackWorkers(h.ctx, pack, 16, "packs"),
@@ -650,7 +683,7 @@ describe("Phase 1 plugin execution", () => {
 					expect(first.content).toContain("worker-3");
 					expect(h.peak()).toBe(2);
 					expect(h.seenEfforts).toContain("high");
-					const sessionID = first.metadata?.sessionID as string;
+					const sessionID = first.metadata?.["sessionID"] as string;
 					const reloaded = yield* makeGroupManager(h.ctx).getGroup(sessionID);
 					expect(reloaded?.workers).toHaveLength(3);
 					const count = h.sessions.size;

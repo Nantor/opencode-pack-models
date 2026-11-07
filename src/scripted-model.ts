@@ -27,7 +27,9 @@ export function scriptedModel(
 			const result = await respond(options);
 			return {
 				stream: new ReadableStream<LanguageModelV3StreamPart>({
-					start(controller) {
+					start(
+						controller: ReadableStreamDefaultController<LanguageModelV3StreamPart>,
+					): void {
 						controller.enqueue({ type: "stream-start", warnings: [] });
 						for (const [index, part] of result.content.entries()) {
 							if (part.type === "tool-call") controller.enqueue(part);

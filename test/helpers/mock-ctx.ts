@@ -10,7 +10,6 @@
 //
 // Extend this file as modules land so the fake stays in lock-step with the
 // plugin's `src/` modules.
-import {} from "@opencode/plugin/effect";
 import { Effect, type Schema } from "effect";
 
 export interface MockWorkerMessage {
@@ -104,13 +103,15 @@ export class SessionMemory {
 			return record;
 		});
 
-	get = (input: { sessionID: string }): Effect.Effect<
-		MockSessionRecord | undefined
-	> => Effect.succeed(this.sessions.get(input.sessionID));
+	get = (input: {
+		sessionID: string;
+	}): Effect.Effect<MockSessionRecord | undefined> =>
+		Effect.succeed(this.sessions.get(input.sessionID));
 
-	context = (input: { sessionID: string }): Effect.Effect<
-		Array<{ role: string; text: string }>
-	> => Effect.succeed(this.sessions.get(input.sessionID)?.messages ?? []);
+	context = (input: {
+		sessionID: string;
+	}): Effect.Effect<Array<{ role: string; text: string }>> =>
+		Effect.succeed(this.sessions.get(input.sessionID)?.messages ?? []);
 
 	synthetic = (input: {
 		sessionID: string;
@@ -149,11 +150,13 @@ export class SessionMemory {
 			this.pushMessage(input.sessionID, { role: "assistant", text: reply });
 		});
 
-	interrupt = (input: { sessionID: string }): Effect.Effect<{
+	interrupt = (_input: {
+		sessionID: string;
+	}): Effect.Effect<{
 		interrupted: boolean;
 	}> => Effect.succeed({ interrupted: true });
 
-	wait = (input: { sessionID: string }): Effect.Effect<void> =>
+	wait = (_input: { sessionID: string }): Effect.Effect<void> =>
 		Effect.succeed(void 0);
 
 	instructions = {
@@ -174,9 +177,9 @@ export class SessionMemory {
 				Effect.sync(() => {
 					this.sessions.get(input.sessionID)?.instructions.delete(input.key);
 				}),
-			list: (input: { sessionID: string }): Effect.Effect<
-				Array<{ key: string; value: unknown }>
-			> =>
+			list: (input: {
+				sessionID: string;
+			}): Effect.Effect<Array<{ key: string; value: unknown }>> =>
 				Effect.sync(() => {
 					const record = this.sessions.get(input.sessionID);
 					return record
@@ -192,7 +195,7 @@ export class SessionMemory {
 	private pushMessage(
 		sessionID: string,
 		message: { role: string; text: string },
-	) {
+	): void {
 		const record = this.sessions.get(sessionID);
 		if (record) record.messages.push(message);
 	}
