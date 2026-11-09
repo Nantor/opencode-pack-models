@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
+import { setup } from "../src";
 import { decodeConfig, TokenLimitSchema } from "../src/config.ts";
 import { fairTruncateTokens } from "../src/consensus.ts";
-import { setup } from "../src/index.ts";
 import { parentResultBudget } from "../src/parent-budget.ts";
 import {
 	limitResultText,
@@ -60,16 +60,16 @@ test("dual settings normalize aliases per scope and prefer new names in the same
 			},
 		}),
 	);
-	expect(config.packs["x"]?.consensus.maxInputToken).toBe("10%");
-	expect(config.packs["x"]?.consensus.maxResultToken).toBe(300);
-	expect(config.packs["y"]?.consensus.maxInputToken).toBe(4000);
-	expect(config.packs["y"]?.consensus.maxResultToken).toBe("40%");
+	expect(config.packs.x?.consensus.maxInputToken).toBe("10%");
+	expect(config.packs.x?.consensus.maxResultToken).toBe(300);
+	expect(config.packs.y?.consensus.maxInputToken).toBe(4000);
+	expect(config.packs.y?.consensus.maxResultToken).toBe("40%");
 });
 
 test("automatic budgets have no hidden absolute ceilings; explicit legacy overrides inherit", async () => {
 	const h = harness();
 	const config = await Effect.runPromise(decodeConfig(h.ctx.options));
-	const settings = config.packs["pair"]?.consensus;
+	const settings = config.packs.pair?.consensus;
 	if (!settings) throw new Error("Missing settings");
 	expect(settings.maxInputTokens).toBeNull();
 	expect(settings.maxInputChars).toBeNull();
@@ -91,7 +91,7 @@ test("automatic budgets have no hidden absolute ceilings; explicit legacy overri
 			packs: { x: { models: ["p/B"] } },
 		}),
 	);
-	expect(legacy.packs["x"]?.consensus).toMatchObject({
+	expect(legacy.packs.x?.consensus).toMatchObject({
 		maxInputTokens: 1200,
 		maxResultTokens: 200,
 		parentReserveTokens: 100,
@@ -115,7 +115,7 @@ test("result limiting includes the marker in the parent-token quota", () => {
 test("parent headroom independently limits results and reserves continuation space", async () => {
 	const h = harness();
 	const config = await Effect.runPromise(decodeConfig(h.ctx.options));
-	const settings = config.packs["pair"]?.consensus;
+	const settings = config.packs.pair?.consensus;
 	if (!settings) throw new Error("Missing test settings");
 	const full = await Effect.runPromise(
 		parentResultBudget(h.ctx, "ses_parent", settings),
@@ -142,7 +142,7 @@ test("matching parent snapshots do not count unchanged nonempty history twice", 
 		content: [{ type: "text", text: "existing history ".repeat(500) }],
 	});
 	const config = await Effect.runPromise(decodeConfig(h.ctx.options));
-	const settings = config.packs["pair"]?.consensus;
+	const settings = config.packs.pair?.consensus;
 	if (!settings) throw new Error("Missing settings");
 	const estimator = tokenEstimator(parent.model.providerID, parent.model.id);
 	const historyTokens = estimator.count(JSON.stringify(parent.messages));

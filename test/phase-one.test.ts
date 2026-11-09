@@ -239,7 +239,7 @@ export function harness(options: Record<string, unknown> = {}): Harness {
 				Effect.gen(function* () {
 					const session = sessions.get(sessionID);
 					if (
-						(session?.metadata?.["packModels"] as { role?: string } | undefined)
+						(session?.metadata?.packModels as { role?: string } | undefined)
 							?.role === "coordinator"
 					) {
 						if (!session) throw new Error("Missing coordinator");
@@ -272,7 +272,7 @@ export function harness(options: Record<string, unknown> = {}): Harness {
 							(part) => part.type === "tool-call",
 						);
 						const results = yield* Effect.forEach(
-							ctx.options["simulateMissingSubagent"] ? [] : calls,
+							ctx.options.simulateMissingSubagent ? [] : calls,
 							(call) =>
 								executor(JSON.parse(call.input), {
 									sessionID: Session.ID.make(sessionID),
@@ -314,14 +314,14 @@ export function harness(options: Record<string, unknown> = {}): Harness {
 					prompts.push(text);
 					const event = { sessionID, options: {} as Record<string, unknown> };
 					for (const hook of hooks) yield* hook(event);
-					seenEfforts.push(event.options["reasoningEffort"]);
+					seenEfforts.push(event.options.reasoningEffort);
 					return {};
 				}),
 			wait: ({ sessionID }: { sessionID: string }) =>
 				Effect.gen(function* () {
 					if (
 						(
-							sessions.get(sessionID)?.metadata?.["packModels"] as
+							sessions.get(sessionID)?.metadata?.packModels as
 								| { role?: string }
 								| undefined
 						)?.role === "coordinator"
@@ -444,8 +444,8 @@ describe("Phase 1 configuration and resolution", () => {
 				packs: { x: { models: ["p/A*"], consensus: { maxInputChars: 20 } } },
 			}),
 		);
-		expect(config.packs["x"]?.maxConcurrency).toBe(2);
-		expect(config.packs["x"]?.consensus).toEqual({
+		expect(config.packs.x?.maxConcurrency).toBe(2);
+		expect(config.packs.x?.consensus).toEqual({
 			enabled: true,
 			model: { provider: "p", model: "A*" },
 			systemPrompt: CONSENSUS_SYSTEM_PROMPT,
@@ -498,7 +498,7 @@ describe("Phase 1 configuration and resolution", () => {
 			packs: { x: { models: ["p/a*", "p/A*#high", "p/A*", "p/B"] } },
 		});
 		const config = await Effect.runPromise(decodeConfig(h.ctx.options));
-		const pack = config.packs["x"];
+		const pack = config.packs.x;
 		if (!pack) throw new Error("Missing test pack");
 		const workers = await Effect.runPromise(
 			resolvePackWorkers(h.ctx, pack, 2, "packs"),
@@ -599,7 +599,7 @@ describe("Phase 1 configuration and resolution", () => {
 			list: () => Effect.succeed({ data: [{ ...model, variants: [variant] }] }),
 		});
 		const config = await Effect.runPromise(decodeConfig(h.ctx.options));
-		const pack = config.packs["pair"];
+		const pack = config.packs.pair;
 		if (!pack) throw new Error("Missing test pack");
 		const workers = await Effect.runPromise(
 			resolvePackWorkers(h.ctx, pack, 16, "packs"),
@@ -683,7 +683,7 @@ describe("Phase 1 plugin execution", () => {
 					expect(first.content).toContain("worker-3");
 					expect(h.peak()).toBe(2);
 					expect(h.seenEfforts).toContain("high");
-					const sessionID = first.metadata?.["sessionID"] as string;
+					const sessionID = first.metadata?.sessionID as string;
 					const reloaded = yield* makeGroupManager(h.ctx).getGroup(sessionID);
 					expect(reloaded?.workers).toHaveLength(3);
 					const count = h.sessions.size;

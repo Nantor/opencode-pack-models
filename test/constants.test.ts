@@ -66,7 +66,7 @@ test("pack overrides win without changing global settings or shared defaults", a
 		}),
 	);
 	expect(config.maxWorkersPerRun).toBe(7);
-	expect(config.packs["inherited"]).toMatchObject({
+	expect(config.packs.inherited).toMatchObject({
 		maxConcurrency: 3,
 		timeoutMs: 500,
 		consensus: {
@@ -78,7 +78,7 @@ test("pack overrides win without changing global settings or shared defaults", a
 			maxInputChars: null,
 		},
 	});
-	expect(config.packs["overridden"]).toMatchObject({
+	expect(config.packs.overridden).toMatchObject({
 		maxConcurrency: 1,
 		timeoutMs: 200,
 		enableInterAgentMessaging: true,
@@ -91,7 +91,7 @@ test("pack overrides win without changing global settings or shared defaults", a
 			maxInputChars: 50,
 		},
 	});
-	expect(config.packs["resetPrompt"]?.consensus.systemPrompt).toBe(
+	expect(config.packs.resetPrompt?.consensus.systemPrompt).toBe(
 		CONSENSUS_SYSTEM_PROMPT,
 	);
 	expect(Object.isFrozen(DEFAULT_CONSENSUS)).toBe(true);

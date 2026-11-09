@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { Agent } from "@opencode/plugin/effect";
 import { Effect } from "effect";
+import { setup } from "../src";
 import { coordinatorFailure } from "../src/coordinator.ts";
-import { setup } from "../src/index.ts";
 import { harness } from "./phase-one.test.ts";
 
 test("dedicated coordinator is hidden, static and subagent-only without modifying built-in agents", async () => {
@@ -83,7 +83,7 @@ test("plan parent never becomes coordinator; off makes zero synthesis calls, on 
 						"Original task",
 					]);
 					const coordinator = h.sessions.get(
-						String(result.metadata?.["sessionID"]),
+						String(result.metadata?.sessionID),
 					);
 					expect(String(coordinator?.agent)).toBe("packs-coordinator");
 					expect(String(parent.agent)).toBe("plan");
@@ -105,7 +105,7 @@ test("subagent definition remains stable after worker results, including a nonem
 			Effect.gen(function* () {
 				const isCoordinator =
 					(
-						h.sessions.get(input.sessionID)?.metadata?.["packModels"] as
+						h.sessions.get(input.sessionID)?.metadata?.packModels as
 							| { role?: string }
 							| undefined
 					)?.role === "coordinator";
@@ -179,9 +179,7 @@ test("parent receives exactly the coordinator's last assistant text and workers 
 			Effect.gen(function* () {
 				yield* setup(h.ctx);
 				const result = yield* h.execute({ agent: "worker", prompt: "Dummy" });
-				const coordinator = h.sessions.get(
-					String(result.metadata?.["sessionID"]),
-				);
+				const coordinator = h.sessions.get(String(result.metadata?.sessionID));
 				const last = coordinator?.messages.at(-1) as {
 					content: {
 						type: string;
@@ -219,7 +217,7 @@ test("incomplete scripted turns fail without corrective LLM prompts", async () =
 		prompt: (input: Parameters<typeof prompt>[0]) => {
 			const session = h.sessions.get(input.sessionID);
 			if (
-				(session?.metadata?.["packModels"] as { role?: string } | undefined)
+				(session?.metadata?.packModels as { role?: string } | undefined)
 					?.role !== "coordinator"
 			)
 				return prompt(input);

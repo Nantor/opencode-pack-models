@@ -74,7 +74,7 @@ export const setup = Effect.fn("packModels.setup")(function* (
 		Effect.gen(function* () {
 			const limit = tokenLimits.get(event.sessionID);
 			const effort = efforts.get(event.sessionID);
-			if (effort) event.options["reasoningEffort"] = effort;
+			if (effort) event.options.reasoningEffort = effort;
 			// Internal worker requests are estimated once below and never enter the
 			// parent cache. Coordinator requests use the local scripted provider.
 			if (
