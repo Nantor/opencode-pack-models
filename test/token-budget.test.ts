@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
-import { TokenLimitSchema, decodeConfig } from "../src/config.ts";
+import { setup } from "../src";
+import { decodeConfig, TokenLimitSchema } from "../src/config.ts";
 import { fairTruncateTokens } from "../src/consensus.ts";
-import { setup } from "../src/index.ts";
 import { parentResultBudget } from "../src/parent-budget.ts";
 import {
 	limitResultText,

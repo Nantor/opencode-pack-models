@@ -17,8 +17,45 @@ import {
 	tokenEstimatorWarning,
 } from "../src/token-budget.ts";
 
-// biome-ignore lint/suspicious/noExportsInTest: Shared in-memory plugin fixture for the review regression suite.
-export function harness(options: Record<string, unknown> = {}) {
+interface HarnessSession {
+	id: Session.ID;
+	model?: Model.Ref;
+	outcome?: "succeeded" | "failed";
+	messages: unknown[];
+	metadata?: Record<string, Schema.Json>;
+	agent?: Agent.ID;
+}
+
+interface HarnessAudit {
+	sessionID: string;
+	text: string;
+	resume: boolean;
+}
+
+type HarnessHook = (event: {
+	sessionID: string;
+	options: Record<string, unknown>;
+}) => Effect.Effect<void>;
+
+interface Harness {
+	ctx: Plugin.Context;
+	agents: Map<string, Types.DeepMutable<Agent.Info>>;
+	stored: Map<string, Schema.Json>;
+	sessions: Map<string, HarnessSession>;
+	audit: HarnessAudit[];
+	interrupted: string[];
+	prompts: string[];
+	seenEfforts: unknown[];
+	synthesisCalls: () => number;
+	synthesisPrompts: string[];
+	hooks: HarnessHook[];
+	setMode: (value: "success" | "fail" | "timeout") => void;
+	failSynthesis: () => void;
+	peak: () => number;
+	execute: (input: unknown) => ReturnType<Tool.Info["execute"]>;
+}
+
+export function harness(options: Record<string, unknown> = {}): Harness {
 	// Native subagent tools declare a structured output in addition to content.
 	// Enforce that contract at execution, just as the live host does.
 	const outputSchema = Schema.Struct({
@@ -27,23 +64,10 @@ export function harness(options: Record<string, unknown> = {}) {
 		output: Schema.String,
 	});
 	const stored = new Map<string, Schema.Json>();
-	const sessions = new Map<
-		string,
-		{
-			id: Session.ID;
-			model?: Model.Ref;
-			outcome?: "succeeded" | "failed";
-			messages: unknown[];
-			metadata?: Record<string, Schema.Json>;
-			agent?: Agent.ID;
-		}
-	>();
-	const audit: { sessionID: string; text: string; resume: boolean }[] = [];
+	const sessions = new Map<string, HarnessSession>();
+	const audit: HarnessAudit[] = [];
 	const interrupted: string[] = [];
-	const hooks: ((event: {
-		sessionID: string;
-		options: Record<string, unknown>;
-	}) => Effect.Effect<void>)[] = [];
+	const hooks: HarnessHook[] = [];
 	let executor: Tool.Info["execute"] = () =>
 		Effect.succeed({
 			output: {
@@ -124,12 +148,15 @@ export function harness(options: Record<string, unknown> = {}) {
 				Effect.sync(() => {
 					callback({
 						list: () => [...agents.values()],
-						get: (id) => agents.get(id),
+						get: (id: string) => agents.get(id),
 						default: () => {},
-						remove: (id) => {
+						remove: (id: string) => {
 							agents.delete(id);
 						},
-						update: (id, update) => {
+						update: (
+							id: string,
+							update: (agent: Types.DeepMutable<Agent.Info>) => void,
+						) => {
 							const agent =
 								agents.get(id) ?? Agent.Info.default(Agent.ID.make(id));
 							agents.set(id, agent);
@@ -187,7 +214,10 @@ export function harness(options: Record<string, unknown> = {}) {
 			switchAgent: ({
 				sessionID,
 				agent,
-			}: { sessionID: string; agent: Agent.ID }) =>
+			}: {
+				sessionID: string;
+				agent: Agent.ID;
+			}) =>
 				Effect.sync(() => {
 					const session = sessions.get(sessionID);
 					if (session) session.agent = agent;
@@ -195,7 +225,10 @@ export function harness(options: Record<string, unknown> = {}) {
 			switchModel: ({
 				sessionID,
 				model,
-			}: { sessionID: string; model: Model.Ref }) =>
+			}: {
+				sessionID: string;
+				model: Model.Ref;
+			}) =>
 				Effect.sync(() => {
 					const session = sessions.get(sessionID);
 					if (session) session.model = model;
@@ -364,17 +397,17 @@ export function harness(options: Record<string, unknown> = {}) {
 		interrupted,
 		prompts,
 		seenEfforts,
-		synthesisCalls: () => synthesisCalls,
+		synthesisCalls: (): number => synthesisCalls,
 		synthesisPrompts,
 		hooks,
-		setMode: (value: typeof mode) => {
+		setMode: (value: typeof mode): void => {
 			mode = value;
 		},
-		failSynthesis: () => {
+		failSynthesis: (): void => {
 			synthesisFails = true;
 		},
-		peak: () => peak,
-		execute: (input: unknown) =>
+		peak: (): number => peak,
+		execute: (input: unknown): ReturnType<Tool.Info["execute"]> =>
 			executor(input, {
 				sessionID: Session.ID.make("ses_parent"),
 				agent: Agent.ID.make("build"),

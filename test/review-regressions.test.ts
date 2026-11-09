@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { Agent, Model, Provider } from "@opencode/plugin/effect";
 import { Error as ToolError } from "@opencode/plugin/promise/tool";
 import { Cause, Deferred, Effect, Fiber } from "effect";
+import { setup } from "../src";
 import { decodeConfig } from "../src/config.ts";
-import { setup } from "../src/index.ts";
 import { resolveModel, resolvePackWorkers } from "../src/models.ts";
 import { harness } from "./phase-one.test.ts";
 

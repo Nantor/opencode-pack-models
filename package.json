@@ -22,7 +22,7 @@
 		"effect": "^4.0.1"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^1.9.4",
+		"@biomejs/biome": "^2.6.6",
 		"@opencode/plugin": "2.2.0",
 		"@opencode/schema": "2.2.0",
 		"@types/bun": "latest",

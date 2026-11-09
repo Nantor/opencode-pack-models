@@ -3,9 +3,9 @@ import { Effect } from "effect";
 import type { ConsensusConfig } from "./config.ts";
 import { SessionID } from "./session-id.ts";
 import {
-	type TokenEstimator,
 	resolveTokenLimit,
 	safeInputTokenLimit,
+	type TokenEstimator,
 	tokenEstimator,
 } from "./token-budget.ts";
 

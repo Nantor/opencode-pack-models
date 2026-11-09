@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { Agent } from "@opencode/plugin/effect";
 import { Effect } from "effect";
+import { setup } from "../src";
 import { coordinatorFailure } from "../src/coordinator.ts";
-import { setup } from "../src/index.ts";
 import { harness } from "./phase-one.test.ts";
 
 test("dedicated coordinator is hidden, static and subagent-only without modifying built-in agents", async () => {

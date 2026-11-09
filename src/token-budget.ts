@@ -1,5 +1,5 @@
 import type { SessionContext } from "@opencode/plugin/effect/session";
-import { type Encoding, type ModelName, Tokenizer, models } from "ai-tokenizer";
+import { type Encoding, type ModelName, models, Tokenizer } from "ai-tokenizer";
 import {
 	cl100k_base,
 	claude,
@@ -22,12 +22,12 @@ export interface TokenModelInfo {
 	limit: { context: number; input?: number | undefined; output: number };
 }
 
-const encodings = {
+const encodings: Record<(typeof models)[ModelName]["encoding"], Encoding> = {
 	cl100k_base,
 	claude,
 	o200k_base,
 	p50k_base,
-} satisfies Record<(typeof models)[ModelName]["encoding"], Encoding>;
+};
 type EncodingName = keyof typeof encodings;
 // Reuse encoding instances across workers; their merge caches avoid repeated work.
 const tokenizers = new Map<EncodingName, Tokenizer>();
@@ -190,14 +190,14 @@ export function tokenEstimator(
 	}
 	const multiplier = model.tokens.contentMultiplier;
 	// Treat special-token literals in reports as ordinary text in both paths.
-	const count = (text: string) =>
+	const count = (text: string): number =>
 		Math.round(tokenizer.encode(text, [], []).length * multiplier);
 	return {
 		modelName,
 		confidence,
 		reason,
 		count,
-		truncate(text, maxTokens, marker = "") {
+		truncate(text: string, maxTokens: number, marker = ""): string {
 			const budget = Math.max(0, Math.floor(maxTokens));
 			if (count(text) <= budget) return text;
 			if (budget === 0) return "";
@@ -260,7 +260,7 @@ export function estimateRequestTokens(
 ): number {
 	const model = models[estimator.modelName];
 	const config = model.tokens;
-	const serialized = (value: unknown) => JSON.stringify(value) ?? "";
+	const serialized = (value: unknown): string => JSON.stringify(value) ?? "";
 	let total = config.baseOverhead;
 	for (const system of request.system)
 		total += config.perMessage + estimator.count(serialized(system));

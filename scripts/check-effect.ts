@@ -71,7 +71,7 @@ function parseVersion(v: string): SemVer {
 	const [core, ...rest] = cleaned.split("-");
 	const pre = rest.join("-") ? rest.join("-").split(".") : [];
 	const parts = (core ?? "").split(".");
-	const num = (s: string | undefined, dflt = 0) => {
+	const num = (s: string | undefined, dflt = 0): number => {
 		if (s === undefined || s === "" || s === "x" || s === "X" || s === "*")
 			return dflt;
 		const n = Number.parseInt(s, 10);

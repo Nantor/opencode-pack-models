@@ -130,7 +130,10 @@ export const resolvePackWorkers = Effect.fn("resolvePackWorkers")(function* (
  * Expose each configured pack as `<packProviderId>/<packId>` in the picker.
  * Refuse collisions with an existing provider instead of replacing its models.
  */
-export function registerProvider(ctx: Plugin.Context, config: Config) {
+export function registerProvider(
+	ctx: Plugin.Context,
+	config: Config,
+): ReturnType<Plugin.Context["provider"]["transform"]> {
 	return ctx.provider.transform((editor: ProviderEditor) => {
 		if (editor.get(config.packProviderId))
 			throw new Error(
